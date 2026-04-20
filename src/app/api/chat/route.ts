@@ -3,6 +3,13 @@ import { createClient } from '@/lib/supabase/server';
 import { callGemini } from '@/lib/gemini/client';
 import { transformGeminiStream, type ParsedCitation } from '@/lib/gemini/stream';
 import { buildSystemPrompt, buildDefaultUserMessage } from '@/lib/gemini/prompts';
+import { routeToTier } from '@/lib/gemini/tier-router';
+import {
+  canUseDeepTier,
+  recordDeepUsage,
+  getDeepUsageRemaining,
+} from '@/lib/gemini/deep-usage';
+import { classifyAskIntent } from '@/features/modes/ask/ask-prompt';
 import type { ChatRequest } from '@/types/chat';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import { getCachedPrice, setCachedPrice } from '@/lib/prices/cache';
@@ -133,8 +140,21 @@ export async function POST(req: Request) {
     content: userMessage,
   });
 
+  let tier = routeToTier({ mode, controls });
+  if (mode === 'ask' && classifyAskIntent(userMessage) === 'DECIDE') {
+    tier = 'deep';
+  }
+  if (tier === 'deep') {
+    if (!canUseDeepTier(user.id)) {
+      tier = 'standard';
+    } else {
+      recordDeepUsage(user.id);
+    }
+  }
+
   const geminiResponse = await callGemini({
     systemPrompt,
+    tier,
     messages: [
       ...recent.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user' as const, content: enrichedUserMessage },
@@ -198,6 +218,8 @@ export async function POST(req: Request) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Model-Tier': tier,
+      'X-Deep-Remaining': String(getDeepUsageRemaining(user.id)),
     },
   });
 }

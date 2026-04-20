@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Zap } from 'lucide-react';
 import type { ChatMessage, Citation, ModeControls, SonarMode } from '@/types/chat';
 import { CitationCard } from './CitationCard';
 import { FollowUpChips } from './FollowUpChips';
@@ -67,6 +67,8 @@ export function ChatStream({
   const [error, setError] = useState<string | null>(null);
   const [rateLimited, setRateLimited] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [tier, setTier] = useState<'standard' | 'deep' | null>(null);
+  const [deepRemaining, setDeepRemaining] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -80,6 +82,8 @@ export function ChatStream({
     setCitations([]);
     setError(null);
     setRateLimited(false);
+    setTier(null);
+    setDeepRemaining(null);
     setStatus('searching');
 
     async function run() {
@@ -102,6 +106,11 @@ export function ChatStream({
           setStatus('error');
           return;
         }
+
+        const tierHeader = res.headers.get('X-Model-Tier');
+        if (tierHeader === 'deep' || tierHeader === 'standard') setTier(tierHeader);
+        const remainingHeader = res.headers.get('X-Deep-Remaining');
+        if (remainingHeader) setDeepRemaining(Number(remainingHeader));
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -162,6 +171,28 @@ export function ChatStream({
     <div className="mt-4 animate-fade-in">
       {initialMessages.length > 0 && (
         <HistoricalMessages messages={initialMessages} hasNew={hasNew} />
+      )}
+
+      {tier && (
+        <div className="flex items-center gap-2 mb-3">
+          {tier === 'deep' ? (
+            <>
+              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20 text-xs font-medium">
+                <Zap size={12} />
+                Deep Analysis
+              </span>
+              {deepRemaining !== null && (
+                <span className="text-xs text-cerna-text-tertiary">
+                  {deepRemaining} remaining today
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="inline-flex items-center px-3 py-1 rounded-full bg-[rgba(124,91,240,0.15)] text-cerna-primary text-xs font-medium">
+              Standard Analysis
+            </span>
+          )}
+        </div>
       )}
 
       {status === 'searching' && !text && (

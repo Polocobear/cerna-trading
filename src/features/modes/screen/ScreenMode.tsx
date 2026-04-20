@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, Zap } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
+import { useDeepRemaining } from '@/lib/gemini/use-deep-remaining';
 import type { ChatMessage, ModeControls } from '@/types/chat';
 
 const SECTORS = ['All', 'Mining', 'Banking', 'Tech', 'Healthcare', 'Energy', 'Consumer', 'REIT'];
@@ -21,6 +22,7 @@ export function ScreenMode({
   const [depth, setDepth] = useState<'quick' | 'deep'>('quick');
   const [trigger, setTrigger] = useState(0);
   const [controls, setControls] = useState<ModeControls>({});
+  const { remaining: deepRemaining } = useDeepRemaining();
 
   function run() {
     setControls({ sector, marketCap, depth });
@@ -90,6 +92,23 @@ export function ScreenMode({
           Screen ASX
         </button>
       </div>
+
+      {depth === 'deep' && deepRemaining !== null && (
+        <div className="mt-2 text-xs flex items-center gap-1.5">
+          {deepRemaining > 0 ? (
+            <>
+              <Zap size={12} className="text-amber-400/70" />
+              <span className="text-amber-400/70">
+                Uses deep analysis ({deepRemaining} remaining today)
+              </span>
+            </>
+          ) : (
+            <span className="text-cerna-text-tertiary">
+              Deep analysis limit reached — using standard model
+            </span>
+          )}
+        </div>
+      )}
 
       {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
