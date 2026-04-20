@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogOut } from 'lucide-react';
+import { LogOut, Wallet } from 'lucide-react';
 import { ModeBar } from './ModeBar';
 import { ContextPanel } from '@/features/context-panel/ContextPanel';
 import { ScreenMode } from '@/features/modes/screen/ScreenMode';
@@ -26,6 +26,7 @@ export function AppShell(props: AppShellProps) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('screen');
   const [analyzeTicker, setAnalyzeTicker] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [positions, setPositions] = useState<Position[]>(props.initialPositions);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(props.initialWatchlist);
   const [journal] = useState<JournalEntry[]>(props.initialJournal);
@@ -136,7 +137,7 @@ export function AppShell(props: AppShellProps) {
       <ModeBar active={mode} onChange={setMode} />
 
       <div className="flex flex-1 overflow-hidden">
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 pb-24 lg:pb-6">
           {mode === 'screen' && <ScreenMode sessionId={sessionId} />}
           {mode === 'analyze' && (
             <AnalyzeMode
@@ -168,9 +169,24 @@ export function AppShell(props: AppShellProps) {
           watchlist={watchlist}
           journal={journal}
           cashAvailable={props.initialProfile?.cash_available ?? 0}
-          onSelectTicker={selectTicker}
+          onSelectTicker={(t) => {
+            selectTicker(t);
+            setDrawerOpen(false);
+          }}
+          activeTicker={analyzeTicker}
+          mobileOpen={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
         />
       </div>
+
+      {/* Mobile FAB */}
+      <button
+        onClick={() => setDrawerOpen(true)}
+        className="lg:hidden fixed bottom-5 right-5 z-40 w-12 h-12 rounded-full bg-cerna-primary hover:bg-cerna-primary-hover text-white flex items-center justify-center glow-primary transition-smooth"
+        aria-label="Open portfolio panel"
+      >
+        <Wallet size={20} />
+      </button>
     </div>
   );
 }

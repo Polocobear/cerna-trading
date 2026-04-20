@@ -39,10 +39,10 @@ export function PositionForm({ onSubmit, onCancel }: PositionFormProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 animate-fade-in">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-lg rounded-xl bg-cerna-bg-secondary border border-cerna-border p-6 space-y-4"
+        className="w-full max-w-lg rounded-2xl glass-elevated p-6 space-y-4 animate-slide-up"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Add position</h3>

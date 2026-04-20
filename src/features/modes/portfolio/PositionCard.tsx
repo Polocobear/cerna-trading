@@ -16,11 +16,11 @@ export function PositionCard({ position, onAnalyze, onClose, onDelete }: Positio
   const value = position.shares * position.cost_basis;
 
   return (
-    <div className="p-4 rounded-xl bg-cerna-bg-secondary border border-cerna-border hover:border-cerna-border-hover transition">
+    <div className="p-4 rounded-xl glass hover:border-cerna-border-hover transition-smooth">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-baseline gap-2">
-            <span className="text-lg font-bold text-cerna-text-primary">{position.ticker}</span>
+            <span className="text-lg font-bold font-mono text-cerna-text-primary">{position.ticker}</span>
             <span className="text-xs text-cerna-text-tertiary">{position.exchange}</span>
           </div>
           {position.company_name && (
@@ -28,8 +28,8 @@ export function PositionCard({ position, onAnalyze, onClose, onDelete }: Positio
           )}
         </div>
         <div className="text-right">
-          <div className="text-sm text-cerna-text-primary">{formatCurrency(value)}</div>
-          <div className="text-xs text-cerna-text-tertiary">
+          <div className="text-sm text-cerna-text-primary tabular-nums">{formatCurrency(value)}</div>
+          <div className="text-xs text-cerna-text-tertiary tabular-nums">
             {position.shares} × {formatCurrency(position.cost_basis)}
           </div>
         </div>
@@ -61,14 +61,14 @@ export function PositionCard({ position, onAnalyze, onClose, onDelete }: Positio
       <div className="flex gap-2 mt-4">
         <button
           onClick={() => onAnalyze(position.ticker)}
-          className="px-3 py-1.5 text-xs rounded-md bg-cerna-primary hover:bg-cerna-primary-hover text-white transition"
+          className="px-3 py-1.5 text-xs rounded-md bg-cerna-primary hover:bg-cerna-primary-hover text-white transition-smooth"
         >
           Analyze
         </button>
         {position.status === 'open' && (
           <button
             onClick={() => onClose(position)}
-            className="px-3 py-1.5 text-xs rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-secondary hover:text-cerna-text-primary transition"
+            className="px-3 py-1.5 text-xs rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-secondary hover:text-cerna-text-primary transition-smooth"
           >
             Close position
           </button>

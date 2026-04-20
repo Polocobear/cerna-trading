@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Wallet, Eye, BookOpen } from 'lucide-react';
+import { EmptyState } from '@/features/chat/EmptyState';
 import type { Position, WatchlistItem, JournalEntry } from '@/types/portfolio';
 import { PositionCard } from './PositionCard';
 import { PositionForm } from './PositionForm';
@@ -58,18 +59,19 @@ export function PortfolioMode(props: PortfolioModeProps) {
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="flex items-center gap-1 mb-5 border-b border-cerna-border">
+      <div className="flex items-center gap-1 mb-5 glass rounded-full p-1 w-fit">
         {(['positions', 'watchlist', 'journal'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              'relative px-4 py-2.5 text-sm font-medium capitalize transition',
-              tab === t ? 'text-cerna-text-primary' : 'text-cerna-text-tertiary hover:text-cerna-text-secondary'
+              'px-4 py-2 text-sm font-medium capitalize transition-smooth rounded-full min-h-[40px]',
+              tab === t
+                ? 'bg-[rgba(124,91,240,0.15)] text-cerna-primary'
+                : 'text-cerna-text-tertiary hover:text-cerna-text-secondary'
             )}
           >
             {t}
-            {tab === t && <span className="absolute left-2 right-2 bottom-0 h-0.5 bg-cerna-primary rounded-full" />}
           </button>
         ))}
       </div>
@@ -85,10 +87,22 @@ export function PortfolioMode(props: PortfolioModeProps) {
               Add position
             </button>
           </div>
-          <div className="grid md:grid-cols-2 gap-3">
-            {props.positions.length === 0 && (
-              <p className="text-cerna-text-tertiary">No positions yet. Add your first.</p>
-            )}
+          {props.positions.length === 0 && (
+            <EmptyState
+              Icon={Wallet}
+              title="No positions yet"
+              description="Add your first holding to get started with portfolio-aware analysis."
+              action={
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="px-4 py-2 rounded-lg bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition-smooth glow-primary-hover min-h-[44px]"
+                >
+                  Add position
+                </button>
+              }
+            />
+          )}
+          <div className="grid md:grid-cols-2 gap-3 stagger-children">
             {props.positions.map((p) => (
               <PositionCard
                 key={p.id}
@@ -158,10 +172,14 @@ export function PortfolioMode(props: PortfolioModeProps) {
             </button>
           </form>
 
-          <div className="grid md:grid-cols-2 gap-3">
-            {props.watchlist.length === 0 && (
-              <p className="text-cerna-text-tertiary">Nothing on your watchlist.</p>
-            )}
+          {props.watchlist.length === 0 && (
+            <EmptyState
+              Icon={Eye}
+              title="Watchlist empty"
+              description="Use the Screen mode to find opportunities, then add them here."
+            />
+          )}
+          <div className="grid md:grid-cols-2 gap-3 stagger-children">
             {props.watchlist.map((w) => (
               <div
                 key={w.id}
@@ -197,9 +215,13 @@ export function PortfolioMode(props: PortfolioModeProps) {
       )}
 
       {tab === 'journal' && (
-        <div className="space-y-2">
+        <div className="space-y-2 stagger-children">
           {props.journal.length === 0 && (
-            <p className="text-cerna-text-tertiary">No journal entries yet.</p>
+            <EmptyState
+              Icon={BookOpen}
+              title="No trade history"
+              description="Your decisions and outcomes will appear here as you trade."
+            />
           )}
           {props.journal.map((j) => (
             <div key={j.id} className="p-4 rounded-xl bg-cerna-bg-secondary border border-cerna-border">

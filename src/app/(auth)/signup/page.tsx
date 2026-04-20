@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 
 export default function SignupPage() {
   const router = useRouter();
+  const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +18,11 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
     const supabase = createClient();
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: displayName } },
+    });
     if (error) {
       setError(error.message);
       setLoading(false);
@@ -28,17 +33,39 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="w-full max-w-md">
+    <div className="relative min-h-screen flex items-center justify-center p-6 overflow-hidden">
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            'radial-gradient(circle at 50% 40%, rgba(124, 91, 240, 0.08) 0%, transparent 60%)',
+        }}
+      />
+
+      <div className="relative w-full max-w-[420px] animate-fade-in">
         <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold tracking-tight">Join Cerna Trading</h1>
-          <p className="mt-2 text-cerna-text-secondary">Your portfolio-aware analyst</p>
+          <div className="inline-flex flex-col items-center">
+            <h1 className="text-2xl font-bold tracking-wider">CERNA</h1>
+            <div className="text-xs tracking-[0.3em] text-cerna-text-tertiary uppercase mt-0.5">
+              Trading
+            </div>
+            <div className="mt-3 h-0.5 w-12 rounded-full bg-gradient-to-r from-transparent via-cerna-primary to-transparent" />
+          </div>
+          <p className="mt-4 text-sm text-cerna-text-secondary">Your portfolio-aware analyst</p>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="rounded-xl border border-cerna-border bg-cerna-bg-secondary p-6 space-y-4"
-        >
+        <form onSubmit={handleSubmit} className="rounded-2xl glass-elevated p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-cerna-text-secondary mb-1.5">
+              Display name
+            </label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-lg bg-cerna-bg-primary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none focus:ring-1 focus:ring-[rgba(124,91,240,0.25)] transition-smooth min-h-[44px]"
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-cerna-text-secondary mb-1.5">Email</label>
             <input
@@ -46,7 +73,7 @@ export default function SignupPage() {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none"
+              className="w-full px-3 py-2.5 rounded-lg bg-cerna-bg-primary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none focus:ring-1 focus:ring-[rgba(124,91,240,0.25)] transition-smooth min-h-[44px]"
             />
           </div>
           <div>
@@ -57,18 +84,18 @@ export default function SignupPage() {
               minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none"
+              className="w-full px-3 py-2.5 rounded-lg bg-cerna-bg-primary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none focus:ring-1 focus:ring-[rgba(124,91,240,0.25)] transition-smooth min-h-[44px]"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-cerna-loss bg-[rgba(239,68,68,0.1)] p-2 rounded-md">{error}</p>
+            <p className="text-sm text-cerna-loss bg-[rgba(239,68,68,0.1)] p-2.5 rounded-md">{error}</p>
           )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 rounded-md bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition disabled:opacity-50"
+            className="w-full py-2.5 rounded-lg bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition-smooth glow-primary-hover min-h-[44px] disabled:opacity-50"
           >
             {loading ? 'Creating…' : 'Create account'}
           </button>
