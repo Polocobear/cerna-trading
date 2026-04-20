@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, Zap } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
+import { useDeepRemaining } from '@/lib/gemini/use-deep-remaining';
 import type { ChatMessage, ModeControls } from '@/types/chat';
 import type { Position, WatchlistItem } from '@/types/portfolio';
 
@@ -27,6 +28,7 @@ export function AnalyzeMode({
   const [trigger, setTrigger] = useState(0);
   const [controls, setControls] = useState<ModeControls>({});
   const [message, setMessage] = useState<string | undefined>(undefined);
+  const { remaining: deepRemaining } = useDeepRemaining();
 
   const tickers = Array.from(
     new Set([...positions.map((p) => p.ticker), ...watchlist.map((w) => w.ticker)])
@@ -86,6 +88,23 @@ export function AnalyzeMode({
           Analyze
         </button>
       </div>
+
+      {analysisType === 'fundamentals' && deepRemaining !== null && (
+        <div className="mt-2 text-xs flex items-center gap-1.5">
+          {deepRemaining > 0 ? (
+            <>
+              <Zap size={12} className="text-amber-400/70" />
+              <span className="text-amber-400/70">
+                Uses deep analysis ({deepRemaining} remaining today)
+              </span>
+            </>
+          ) : (
+            <span className="text-cerna-text-tertiary">
+              Deep analysis limit reached — using standard model
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 mt-3">
         <button
