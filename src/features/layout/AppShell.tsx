@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogOut, Wallet } from 'lucide-react';
+import { LogOut, Wallet, History } from 'lucide-react';
 import { ModeBar } from './ModeBar';
 import { ContextPanel } from '@/features/context-panel/ContextPanel';
+import { SessionSidebar, type SessionSummary } from '@/features/chat/SessionSidebar';
 import { ScreenMode } from '@/features/modes/screen/ScreenMode';
 import { AnalyzeMode } from '@/features/modes/analyze/AnalyzeMode';
 import { BriefMode } from '@/features/modes/brief/BriefMode';
@@ -20,21 +21,41 @@ interface AppShellProps {
   initialWatchlist: WatchlistItem[];
   initialJournal: JournalEntry[];
   userEmail: string;
+  initialMode?: Mode;
 }
 
 export function AppShell(props: AppShellProps) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>('screen');
+  const [mode, setMode] = useState<Mode>(props.initialMode ?? 'screen');
   const [analyzeTicker, setAnalyzeTicker] = useState('');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [positions, setPositions] = useState<Position[]>(props.initialPositions);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(props.initialWatchlist);
   const [journal] = useState<JournalEntry[]>(props.initialJournal);
 
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessionKey, setSessionKey] = useState(0);
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined);
+
   const sessionId = useMemo(() => {
+    if (activeSessionId) return activeSessionId;
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
     return `sess-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionKey, activeSessionId]);
+
+  function handleSelectSession(s: SessionSummary) {
+    setMode(s.mode);
+    setActiveSessionId(s.id);
+    setSessionKey((k) => k + 1);
+    setHistoryOpen(false);
+  }
+
+  function handleNewChat() {
+    setActiveSessionId(undefined);
+    setSessionKey((k) => k + 1);
+    setHistoryOpen(false);
+  }
 
   const selectTicker = useCallback((ticker: string) => {
     setAnalyzeTicker(ticker);
@@ -117,6 +138,14 @@ export function AppShell(props: AppShellProps) {
     <div className="flex flex-col h-screen">
       <header className="flex items-center justify-between px-5 py-3 border-b border-cerna-border bg-cerna-bg-secondary">
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="p-2 -ml-2 text-cerna-text-secondary hover:text-cerna-text-primary transition-smooth rounded-lg"
+            aria-label="Open chat history"
+            title="Chat history"
+          >
+            <History size={18} />
+          </button>
           <div className="w-8 h-8 rounded-lg bg-cerna-primary flex items-center justify-center text-white font-bold">
             C
           </div>
@@ -138,16 +167,17 @@ export function AppShell(props: AppShellProps) {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 pb-24 lg:pb-6">
-          {mode === 'screen' && <ScreenMode sessionId={sessionId} />}
+          {mode === 'screen' && <ScreenMode key={sessionId} sessionId={sessionId} />}
           {mode === 'analyze' && (
             <AnalyzeMode
+              key={sessionId}
               sessionId={sessionId}
               initialTicker={analyzeTicker}
               positions={positions}
               watchlist={watchlist}
             />
           )}
-          {mode === 'brief' && <BriefMode sessionId={sessionId} />}
+          {mode === 'brief' && <BriefMode key={sessionId} sessionId={sessionId} />}
           {mode === 'portfolio' && (
             <PortfolioMode
               positions={positions}
@@ -161,7 +191,7 @@ export function AppShell(props: AppShellProps) {
               onRemoveWatch={removeWatch}
             />
           )}
-          {mode === 'ask' && <AskMode sessionId={sessionId} />}
+          {mode === 'ask' && <AskMode key={sessionId} sessionId={sessionId} />}
         </main>
 
         <ContextPanel
@@ -187,6 +217,14 @@ export function AppShell(props: AppShellProps) {
       >
         <Wallet size={20} />
       </button>
+
+      <SessionSidebar
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onSelect={handleSelectSession}
+        onNewChat={handleNewChat}
+        activeSessionId={activeSessionId}
+      />
     </div>
   );
 }

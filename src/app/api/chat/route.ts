@@ -6,6 +6,64 @@ import { buildSystemPrompt, buildDefaultUserMessage } from '@/lib/sonar/prompts'
 import type { ChatRequest } from '@/types/chat';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import type { SonarMessage } from '@/types/sonar';
+import { getCachedPrice, setCachedPrice } from '@/lib/prices/cache';
+
+async function enrichWithPrices(positions: Position[]): Promise<Position[]> {
+  if (positions.length === 0) return positions;
+  const uncached = positions.filter((p) => !getCachedPrice(p.ticker));
+  if (uncached.length > 0) {
+    try {
+      const symbols = uncached.map((p) => `${p.ticker}.AX`).join(',');
+      const res = await fetch(
+        `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`,
+        {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          },
+        }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as {
+          quoteResponse?: {
+            result?: Array<{
+              symbol: string;
+              regularMarketPrice?: number;
+              regularMarketChange?: number;
+              regularMarketChangePercent?: number;
+              currency?: string;
+              marketState?: string;
+            }>;
+          };
+        };
+        for (const q of data.quoteResponse?.result ?? []) {
+          if (q.regularMarketPrice == null) continue;
+          const ticker = q.symbol.replace(/\.AX$/, '');
+          setCachedPrice(ticker, {
+            price: q.regularMarketPrice,
+            change: q.regularMarketChange ?? 0,
+            changePercent: q.regularMarketChangePercent ?? 0,
+            currency: q.currency ?? 'AUD',
+            marketState: q.marketState ?? 'CLOSED',
+          });
+        }
+      }
+    } catch {
+      // graceful degradation
+    }
+  }
+  return positions.map((p) => {
+    const cached = getCachedPrice(p.ticker);
+    return cached
+      ? ({ ...p, _current_price: cached.price, _current_change: cached.change } as Position & {
+          _current_price?: number;
+          _current_change?: number;
+        })
+      : p;
+  });
+}
+
+export type EnrichedPosition = Position & { _current_price?: number; _current_change?: number };
 
 export const runtime = 'nodejs';
 
@@ -39,7 +97,8 @@ export async function POST(req: Request) {
       .limit(10),
   ]);
 
-  const portfolio = (positionsRes.data ?? []) as Position[];
+  const rawPortfolio = (positionsRes.data ?? []) as Position[];
+  const portfolio = await enrichWithPrices(rawPortfolio);
   const profile = (profileRes.data ?? null) as Profile | null;
   const watchlist = (watchlistRes.data ?? []) as WatchlistItem[];
   const recent = ((messagesRes.data ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>).reverse();
@@ -47,10 +106,21 @@ export async function POST(req: Request) {
   const userMessage = body.message?.trim() || buildDefaultUserMessage(mode, controls);
   const systemPrompt = buildSystemPrompt({ mode, controls, message: userMessage, portfolio, watchlist, profile });
 
+  const priceLines = (portfolio as EnrichedPosition[])
+    .filter((p) => typeof p._current_price === 'number')
+    .map((p) => {
+      const pnlPct = p.cost_basis > 0 ? (((p._current_price ?? 0) - p.cost_basis) / p.cost_basis) * 100 : 0;
+      return `${p.ticker}: $${(p._current_price ?? 0).toFixed(2)} (cost $${p.cost_basis.toFixed(2)}, ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)`;
+    });
+  const enrichedUserMessage =
+    priceLines.length > 0
+      ? `${userMessage}\n\nCurrent portfolio prices:\n${priceLines.join('\n')}`
+      : userMessage;
+
   const messages: SonarMessage[] = [
     { role: 'system', content: systemPrompt },
     ...recent.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user', content: userMessage },
+    { role: 'user', content: enrichedUserMessage },
   ];
 
   await supabase.from('chat_messages').insert({

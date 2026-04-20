@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Wallet, Eye, BookOpen } from 'lucide-react';
+import { Plus, Wallet, Eye, BookOpen, TrendingUp, TrendingDown } from 'lucide-react';
 import { EmptyState } from '@/features/chat/EmptyState';
 import type { Position, WatchlistItem, JournalEntry } from '@/types/portfolio';
 import { PositionCard } from './PositionCard';
 import { PositionForm } from './PositionForm';
-import { formatCurrency, formatDate } from '@/lib/utils/format';
+import { formatCurrency, formatDate, formatPercent } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
+import { usePrices } from '@/lib/prices/use-prices';
 
 interface PortfolioModeProps {
   positions: Position[];
@@ -44,6 +45,22 @@ export function PortfolioMode(props: PortfolioModeProps) {
   const [watchTicker, setWatchTicker] = useState('');
   const [watchPrice, setWatchPrice] = useState('');
   const [watchNotes, setWatchNotes] = useState('');
+
+  const openTickers = props.positions.filter((p) => p.status === 'open').map((p) => p.ticker);
+  const { prices, isLoading: pricesLoading } = usePrices(openTickers);
+
+  const totals = props.positions.reduce(
+    (acc, p) => {
+      if (p.status !== 'open') return acc;
+      const px = prices[p.ticker]?.price ?? p.cost_basis;
+      acc.value += p.shares * px;
+      acc.cost += p.shares * p.cost_basis;
+      return acc;
+    },
+    { value: 0, cost: 0 }
+  );
+  const totalPnl = totals.value - totals.cost;
+  const totalPnlPct = totals.cost > 0 ? (totalPnl / totals.cost) * 100 : 0;
 
   async function handleAddWatch(e: React.FormEvent) {
     e.preventDefault();
@@ -102,11 +119,34 @@ export function PortfolioMode(props: PortfolioModeProps) {
               }
             />
           )}
+          {props.positions.length > 0 && (
+            <div className="glass rounded-xl p-4 mb-4 flex flex-wrap items-center gap-x-8 gap-y-2">
+              <div>
+                <div className="text-xs text-cerna-text-tertiary uppercase tracking-wider">Total value</div>
+                <div className="text-xl font-semibold tabular-nums">{formatCurrency(totals.value)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-cerna-text-tertiary uppercase tracking-wider">Total P&amp;L</div>
+                <div
+                  className={cn(
+                    'flex items-center gap-1 text-base font-semibold tabular-nums',
+                    totalPnl >= 0 ? 'text-cerna-profit' : 'text-cerna-loss'
+                  )}
+                >
+                  {totalPnl >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                  {totalPnl >= 0 ? '+' : '-'}
+                  {formatCurrency(Math.abs(totalPnl))} ({formatPercent(totalPnlPct, 1)})
+                </div>
+              </div>
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-3 stagger-children">
             {props.positions.map((p) => (
               <PositionCard
                 key={p.id}
                 position={p}
+                currentPrice={prices[p.ticker]?.price}
+                priceLoading={pricesLoading}
                 onAnalyze={props.onAnalyze}
                 onClose={props.onClosePosition}
                 onDelete={props.onDeletePosition}

@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, X } from 'lucide-react';
 import type { Position, WatchlistItem, JournalEntry } from '@/types/portfolio';
 import { formatCurrency, formatPercent, formatDate } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
+import { usePrices } from '@/lib/prices/use-prices';
 
 interface ContextPanelProps {
   positions: Position[];
@@ -12,9 +13,20 @@ interface ContextPanelProps {
   cashAvailable: number;
   onSelectTicker: (ticker: string) => void;
   activeTicker?: string;
-  loading?: boolean;
   mobileOpen?: boolean;
   onClose?: () => void;
+}
+
+function ShimmerBlock({ w = 'w-24', h = 'h-4' }: { w?: string; h?: string }) {
+  return (
+    <div
+      className={cn(
+        'rounded-md bg-gradient-to-r from-cerna-bg-tertiary via-cerna-bg-hover to-cerna-bg-tertiary bg-[length:200%_100%] animate-shimmer',
+        w,
+        h
+      )}
+    />
+  );
 }
 
 export function ContextPanel({
@@ -24,32 +36,47 @@ export function ContextPanel({
   cashAvailable,
   onSelectTicker,
   activeTicker,
-  loading,
   mobileOpen,
   onClose,
 }: ContextPanelProps) {
   const openPositions = positions.filter((p) => p.status === 'open');
-  const totalValue = openPositions.reduce((s, p) => s + p.shares * p.cost_basis, 0) + cashAvailable;
-  const holdingsSorted = [...openPositions].sort(
-    (a, b) => b.shares * b.cost_basis - a.shares * a.cost_basis
-  );
+  const tickers = openPositions.map((p) => p.ticker);
+  const { prices, isLoading, marketState } = usePrices(tickers);
+
+  const totalValueFromPrices = openPositions.reduce((s, p) => {
+    const px = prices[p.ticker]?.price ?? p.cost_basis;
+    return s + p.shares * px;
+  }, 0);
+  const totalValue = totalValueFromPrices + cashAvailable;
+
+  const todayChange = openPositions.reduce((s, p) => {
+    const change = prices[p.ticker]?.change ?? 0;
+    return s + p.shares * change;
+  }, 0);
+  const baseForPercent = totalValueFromPrices - todayChange;
+  const todayChangePct = baseForPercent > 0 ? (todayChange / baseForPercent) * 100 : 0;
+
+  const holdingsSorted = [...openPositions].sort((a, b) => {
+    const av = a.shares * (prices[a.ticker]?.price ?? a.cost_basis);
+    const bv = b.shares * (prices[b.ticker]?.price ?? b.cost_basis);
+    return bv - av;
+  });
 
   const concentrationWarning = openPositions.some((p) => {
-    const v = p.shares * p.cost_basis;
+    const v = p.shares * (prices[p.ticker]?.price ?? p.cost_basis);
     return totalValue > 0 && v / totalValue > 0.1;
   });
 
-  const todayChange = 0;
+  const isMarketOpen = marketState === 'REGULAR';
 
   const panelBody = (
     <div className="flex flex-col h-full overflow-y-auto custom-scrollbar">
-      {/* Summary */}
       <div className="p-5 border-b border-cerna-border">
         <div className="text-xs uppercase tracking-wider text-cerna-text-tertiary mb-2">Portfolio</div>
-        {loading ? (
+        {isLoading && Object.keys(prices).length === 0 ? (
           <div className="space-y-2">
-            <div className="h-8 w-36 rounded-md bg-gradient-to-r from-cerna-bg-tertiary via-cerna-bg-hover to-cerna-bg-tertiary bg-[length:200%_100%] animate-shimmer" />
-            <div className="h-4 w-24 rounded-md bg-gradient-to-r from-cerna-bg-tertiary via-cerna-bg-hover to-cerna-bg-tertiary bg-[length:200%_100%] animate-shimmer" />
+            <ShimmerBlock w="w-36" h="h-8" />
+            <ShimmerBlock w="w-24" />
           </div>
         ) : (
           <>
@@ -68,22 +95,35 @@ export function ContextPanel({
               <span
                 className={cn('tabular-nums', todayChange >= 0 ? 'text-cerna-profit' : 'text-cerna-loss')}
               >
-                {formatPercent(todayChange)} today
+                {formatPercent(todayChangePct)} ({formatCurrency(Math.abs(todayChange))})
               </span>
               <span className="text-cerna-text-tertiary">· {openPositions.length} positions</span>
+            </div>
+            <div className="flex items-center gap-1.5 mt-3 text-xs">
+              <span
+                className={cn(
+                  'w-1.5 h-1.5 rounded-full',
+                  isMarketOpen ? 'bg-emerald-500 animate-pulse' : 'bg-cerna-text-tertiary'
+                )}
+              />
+              <span className="text-cerna-text-tertiary">
+                {isMarketOpen ? 'ASX Open' : 'Market Closed'}
+              </span>
             </div>
           </>
         )}
       </div>
 
-      {/* Holdings */}
       <div className="p-5 border-b border-cerna-border">
         <div className="text-xs uppercase tracking-wider text-cerna-text-tertiary mb-3">Holdings</div>
         <div className="space-y-1 max-h-72 overflow-y-auto custom-scrollbar">
-          {holdingsSorted.length === 0 && !loading && (
+          {holdingsSorted.length === 0 && !isLoading && (
             <p className="text-sm text-cerna-text-tertiary">No positions yet.</p>
           )}
           {holdingsSorted.slice(0, 10).map((p) => {
+            const px = prices[p.ticker];
+            const currentPrice = px?.price ?? p.cost_basis;
+            const pnlPct = p.cost_basis > 0 ? ((currentPrice - p.cost_basis) / p.cost_basis) * 100 : 0;
             const isActive = activeTicker && p.ticker === activeTicker;
             return (
               <button
@@ -97,14 +137,31 @@ export function ContextPanel({
                 )}
               >
                 <span className="font-semibold text-cerna-text-primary">{p.ticker}</span>
-                <span className="text-xs text-cerna-text-tertiary tabular-nums">{p.shares} sh</span>
+                <span className="flex items-center gap-1.5 text-xs tabular-nums">
+                  {px ? (
+                    <>
+                      <span className="text-cerna-text-tertiary">{formatCurrency(currentPrice)}</span>
+                      {pnlPct >= 0 ? (
+                        <TrendingUp size={12} className="text-cerna-profit" />
+                      ) : (
+                        <TrendingDown size={12} className="text-cerna-loss" />
+                      )}
+                      <span className={pnlPct >= 0 ? 'text-cerna-profit' : 'text-cerna-loss'}>
+                        {formatPercent(pnlPct, 1)}
+                      </span>
+                    </>
+                  ) : isLoading ? (
+                    <ShimmerBlock w="w-16" h="h-3" />
+                  ) : (
+                    <span className="text-cerna-text-tertiary">{p.shares} sh</span>
+                  )}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Watchlist */}
       <div className="p-5 border-b border-cerna-border">
         <div className="text-xs uppercase tracking-wider text-cerna-text-tertiary mb-3">Watchlist</div>
         <div className="space-y-1">
@@ -126,7 +183,6 @@ export function ContextPanel({
         </div>
       </div>
 
-      {/* Recent */}
       <div className="p-5 border-b border-cerna-border">
         <div className="text-xs uppercase tracking-wider text-cerna-text-tertiary mb-3">Recent</div>
         <div className="space-y-1.5">
@@ -142,7 +198,6 @@ export function ContextPanel({
         </div>
       </div>
 
-      {/* SMSF */}
       <div className="p-5">
         <div className="text-xs uppercase tracking-wider text-cerna-text-tertiary mb-3">SMSF</div>
         <div className="flex items-center gap-2 text-sm">
@@ -162,12 +217,10 @@ export function ContextPanel({
 
   return (
     <>
-      {/* Desktop */}
       <aside className="hidden lg:flex flex-col w-80 shrink-0 border-l border-cerna-border glass">
         {panelBody}
       </aside>
 
-      {/* Mobile drawer */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex">
           <div className="flex-1 bg-black/60 animate-fade-in" onClick={onClose} />
