@@ -1,10 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { Newspaper } from 'lucide-react';
+import { Newspaper, Zap } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
-import type { ChatMessage, ModeControls } from '@/types/chat';
+import type { BriefFocus, ChatMessage, ModeControls } from '@/types/chat';
+import { useDeepRemaining } from '@/lib/gemini/use-deep-remaining';
+import { cn } from '@/lib/utils/cn';
+
+const FOCUS_OPTIONS: Array<{ id: BriefFocus; label: string; deep?: boolean }> = [
+  { id: 'everything', label: 'Everything' },
+  { id: 'earnings', label: 'Earnings Only' },
+  { id: 'news', label: 'News Only' },
+  { id: 'macro', label: 'Macro Only' },
+  { id: 'analyst', label: 'Analyst Actions' },
+  { id: 'dividends', label: 'Dividends' },
+  { id: 'portfolio_health', label: 'Portfolio Health', deep: true },
+];
 
 export function BriefMode({
   sessionId,
@@ -15,34 +27,59 @@ export function BriefMode({
 }) {
   const [scope, setScope] = useState<'holdings' | 'watchlist'>('holdings');
   const [depth, setDepth] = useState<'quick' | 'deep'>('quick');
+  const [focus, setFocus] = useState<BriefFocus>('everything');
   const [trigger, setTrigger] = useState(0);
   const [controls, setControls] = useState<ModeControls>({});
+  const { remaining: deepRemaining } = useDeepRemaining();
 
   function run() {
-    setControls({ scope, depth });
+    setControls({ scope, depth, focus });
     setTrigger((t) => t + 1);
   }
+
+  const selectedOption = FOCUS_OPTIONS.find((o) => o.id === focus);
+  const isDeep = !!selectedOption?.deep;
 
   return (
     <div className="max-w-4xl mx-auto">
       <div className="glass rounded-xl p-4 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-end gap-3">
+        <div className="flex-1 min-w-[160px]">
+          <label className="block text-xs uppercase tracking-wider text-cerna-text-tertiary mb-1.5">
+            Focus
+          </label>
+          <select
+            value={focus}
+            onChange={(e) => setFocus(e.target.value as BriefFocus)}
+            className="w-full px-3 py-2.5 rounded-lg bg-cerna-bg-primary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none focus:ring-1 focus:ring-[rgba(124,91,240,0.25)] transition-smooth min-h-[44px]"
+          >
+            {FOCUS_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+                {o.deep ? ' ⚡' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="block text-xs uppercase tracking-wider text-cerna-text-tertiary mb-1.5">
             Scope
           </label>
           <div className="flex rounded-full glass p-0.5">
-            {([
-              ['holdings', 'All holdings'],
-              ['watchlist', 'Watchlist only'],
-            ] as const).map(([val, label]) => (
+            {(
+              [
+                ['holdings', 'All holdings'],
+                ['watchlist', 'Watchlist only'],
+              ] as const
+            ).map(([val, label]) => (
               <button
                 key={val}
                 onClick={() => setScope(val)}
-                className={`px-4 py-2 text-sm rounded-full transition-smooth min-h-[40px] ${
+                className={cn(
+                  'px-4 py-2 text-sm rounded-full transition-smooth min-h-[40px]',
                   scope === val
                     ? 'bg-cerna-primary text-white'
                     : 'text-cerna-text-secondary hover:text-cerna-text-primary'
-                }`}
+                )}
               >
                 {label}
               </button>
@@ -58,11 +95,12 @@ export function BriefMode({
               <button
                 key={d}
                 onClick={() => setDepth(d)}
-                className={`px-4 py-2 text-sm rounded-full capitalize transition-smooth min-h-[40px] ${
+                className={cn(
+                  'px-4 py-2 text-sm rounded-full capitalize transition-smooth min-h-[40px]',
                   depth === d
                     ? 'bg-cerna-primary text-white'
                     : 'text-cerna-text-secondary hover:text-cerna-text-primary'
-                }`}
+                )}
               >
                 {d === 'deep' ? 'Full' : 'Quick'}
               </button>
@@ -77,6 +115,23 @@ export function BriefMode({
           Brief me
         </button>
       </div>
+
+      {isDeep && deepRemaining !== null && (
+        <div className="mt-2 text-xs flex items-center gap-1.5">
+          {deepRemaining > 0 ? (
+            <>
+              <Zap size={12} className="text-amber-400/70" />
+              <span className="text-amber-400/70">
+                Uses deep analysis ({deepRemaining} remaining today)
+              </span>
+            </>
+          ) : (
+            <span className="text-cerna-text-tertiary">
+              Deep analysis limit reached — using standard model
+            </span>
+          )}
+        </div>
+      )}
 
       {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
