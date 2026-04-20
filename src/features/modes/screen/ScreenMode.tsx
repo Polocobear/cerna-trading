@@ -1,0 +1,97 @@
+'use client';
+
+import { useState } from 'react';
+import { ChatStream } from '@/features/chat/ChatStream';
+import type { ModeControls } from '@/types/chat';
+
+const SECTORS = ['All', 'Mining', 'Banking', 'Tech', 'Healthcare', 'Energy', 'Consumer', 'REIT'];
+const CAPS = ['All', 'Large ($5B+)', 'Mid ($500M-5B)', 'Small ($100-500M)'];
+
+export function ScreenMode({ sessionId }: { sessionId: string }) {
+  const [sector, setSector] = useState('All');
+  const [marketCap, setMarketCap] = useState('All');
+  const [depth, setDepth] = useState<'quick' | 'deep'>('quick');
+  const [trigger, setTrigger] = useState(0);
+  const [controls, setControls] = useState<ModeControls>({});
+
+  function run() {
+    setControls({ sector, marketCap, depth });
+    setTrigger((t) => t + 1);
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <div className="flex flex-wrap items-end gap-3 p-4 bg-cerna-bg-secondary rounded-xl border border-cerna-border">
+        <div className="flex-1 min-w-[140px]">
+          <label className="block text-xs uppercase tracking-wider text-cerna-text-tertiary mb-1.5">
+            Sector
+          </label>
+          <select
+            value={sector}
+            onChange={(e) => setSector(e.target.value)}
+            className="w-full px-3 py-2 rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none"
+          >
+            {SECTORS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[160px]">
+          <label className="block text-xs uppercase tracking-wider text-cerna-text-tertiary mb-1.5">
+            Market cap
+          </label>
+          <select
+            value={marketCap}
+            onChange={(e) => setMarketCap(e.target.value)}
+            className="w-full px-3 py-2 rounded-md bg-cerna-bg-tertiary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none"
+          >
+            {CAPS.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs uppercase tracking-wider text-cerna-text-tertiary mb-1.5">
+            Depth
+          </label>
+          <div className="flex rounded-md border border-cerna-border overflow-hidden">
+            <button
+              onClick={() => setDepth('quick')}
+              className={`px-3 py-2 text-sm ${depth === 'quick' ? 'bg-cerna-primary text-white' : 'bg-cerna-bg-tertiary text-cerna-text-secondary'}`}
+            >
+              Quick
+            </button>
+            <button
+              onClick={() => setDepth('deep')}
+              className={`px-3 py-2 text-sm ${depth === 'deep' ? 'bg-cerna-primary text-white' : 'bg-cerna-bg-tertiary text-cerna-text-secondary'}`}
+            >
+              Deep
+            </button>
+          </div>
+        </div>
+        <button
+          onClick={run}
+          className="px-5 py-2 rounded-md bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition"
+        >
+          Screen ASX
+        </button>
+      </div>
+
+      <ChatStream
+        mode="screen"
+        controls={controls}
+        trigger={trigger}
+        sessionId={sessionId}
+        followUps={[
+          'Show cheapest one in detail',
+          'Compare to my current holdings',
+          'Focus on dividend payers',
+        ]}
+      />
+    </div>
+  );
+}
