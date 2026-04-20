@@ -5,13 +5,25 @@ import type { Position, WatchlistItem, JournalEntry, Profile } from '@/types/por
 
 export const dynamic = 'force-dynamic';
 
-export default async function DashboardPage() {
+interface DashboardPageProps {
+  searchParams: { mode?: string };
+}
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const supabase = createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   if (!user) redirect('/login');
+
+  const { data: profileCheck } = await supabase
+    .from('profiles')
+    .select('investment_strategy')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (!profileCheck?.investment_strategy) redirect('/onboarding');
 
   const [positionsRes, watchlistRes, journalRes, profileRes] = await Promise.all([
     supabase
@@ -38,6 +50,12 @@ export default async function DashboardPage() {
   const journal = (journalRes.data ?? []) as JournalEntry[];
   const profile = (profileRes.data ?? null) as Profile | null;
 
+  const validModes = ['screen', 'analyze', 'brief', 'portfolio', 'ask'] as const;
+  type ValidMode = (typeof validModes)[number];
+  const initialMode: ValidMode = (validModes as readonly string[]).includes(searchParams.mode ?? '')
+    ? (searchParams.mode as ValidMode)
+    : 'screen';
+
   return (
     <AppShell
       initialProfile={profile}
@@ -45,6 +63,7 @@ export default async function DashboardPage() {
       initialWatchlist={watchlist}
       initialJournal={journal}
       userEmail={user.email ?? ''}
+      initialMode={initialMode}
     />
   );
 }
