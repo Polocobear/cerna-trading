@@ -1,6 +1,33 @@
 export type Mode = 'screen' | 'analyze' | 'brief' | 'portfolio' | 'ask';
 export type SonarMode = Exclude<Mode, 'portfolio'>;
 
+export type ScreenStrategy =
+  | 'value'
+  | 'growth'
+  | 'dividend'
+  | 'quality'
+  | 'momentum'
+  | 'turnaround'
+  | 'custom';
+
+export type AnalysisType =
+  | 'thesis'
+  | 'fundamentals'
+  | 'technical'
+  | 'analyst'
+  | 'peers'
+  | 'valuation'
+  | 'portfolio_report';
+
+export type BriefFocus =
+  | 'everything'
+  | 'earnings'
+  | 'news'
+  | 'macro'
+  | 'analyst'
+  | 'dividends'
+  | 'portfolio_health';
+
 export interface Citation {
   url: string;
   title?: string;
@@ -21,12 +48,36 @@ export interface ChatMessage {
 }
 
 export interface ModeControls {
+  // Shared
+  depth?: 'quick' | 'deep';
+
+  // Screen
   sector?: string;
   marketCap?: string;
-  depth?: 'quick' | 'deep';
+  strategy?: ScreenStrategy;
+  maxPE?: number;
+  maxPB?: number;
+  maxPEG?: number;
+  minEPSGrowth?: number;
+  minRevenueGrowth?: number;
+  minDividendYield?: number;
+  maxPayoutRatio?: number;
+  maxDebtEquity?: number;
+  minROE?: number;
+  positiveFCF?: boolean;
+  minAnalystConsensus?: 'any' | 'strong_buy' | 'buy' | 'hold';
+  minPriceTargetUpside?: number;
+  above200MA?: boolean;
+  above50MA?: boolean;
+  rsiRange?: 'any' | 'oversold' | 'neutral' | 'overbought';
+
+  // Analyze
   ticker?: string;
-  analysisType?: 'thesis' | 'peers' | 'fundamentals';
+  analysisType?: AnalysisType;
+
+  // Brief
   scope?: 'holdings' | 'watchlist';
+  focus?: BriefFocus;
 }
 
 export interface ChatRequest {
