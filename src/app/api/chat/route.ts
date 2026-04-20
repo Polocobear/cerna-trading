@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { callSonarStream } from '@/lib/sonar/client';
-import { transformSonarStream } from '@/lib/sonar/stream';
-import { buildSystemPrompt, buildDefaultUserMessage } from '@/lib/sonar/prompts';
+import { callGemini } from '@/lib/gemini/client';
+import { transformGeminiStream, type ParsedCitation } from '@/lib/gemini/stream';
+import { buildSystemPrompt, buildDefaultUserMessage } from '@/lib/gemini/prompts';
 import type { ChatRequest } from '@/types/chat';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
-import type { SonarMessage } from '@/types/sonar';
 import { getCachedPrice, setCachedPrice } from '@/lib/prices/cache';
-import { checkRateLimit } from '@/lib/sonar/rate-limit';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 async function enrichWithPrices(positions: Position[]): Promise<Position[]> {
   if (positions.length === 0) return positions;
@@ -126,12 +125,6 @@ export async function POST(req: Request) {
       ? `${userMessage}\n\nCurrent portfolio prices:\n${priceLines.join('\n')}`
       : userMessage;
 
-  const messages: SonarMessage[] = [
-    { role: 'system', content: systemPrompt },
-    ...recent.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-    { role: 'user', content: enrichedUserMessage },
-  ];
-
   await supabase.from('chat_messages').insert({
     user_id: user.id,
     session_id: sessionId,
@@ -140,14 +133,21 @@ export async function POST(req: Request) {
     content: userMessage,
   });
 
-  const sonarResponse = await callSonarStream(messages);
-  if (!sonarResponse.ok || !sonarResponse.body) {
-    const errText = await sonarResponse.text().catch(() => 'Sonar error');
-    return NextResponse.json({ error: errText }, { status: 502 });
+  const geminiResponse = await callGemini({
+    systemPrompt,
+    messages: [
+      ...recent.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      { role: 'user' as const, content: enrichedUserMessage },
+    ],
+  });
+
+  if (!geminiResponse.ok || !geminiResponse.body) {
+    const errText = await geminiResponse.text().catch(() => 'Gemini error');
+    const status = geminiResponse.status === 429 ? 429 : 502;
+    return NextResponse.json({ error: errText }, { status });
   }
 
-  const transformed = transformSonarStream(sonarResponse.body);
-
+  const transformed = transformGeminiStream(geminiResponse.body);
   const [forClient, forPersist] = transformed.tee();
 
   void (async () => {
@@ -155,7 +155,7 @@ export async function POST(req: Request) {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
-    let citations: string[] = [];
+    let citations: ParsedCitation[] = [];
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -169,12 +169,12 @@ export async function POST(req: Request) {
             const evt = JSON.parse(line.slice(5).trim()) as {
               type: string;
               content?: string;
-              citations?: string[];
+              citations?: ParsedCitation[];
             };
             if (evt.type === 'done' && evt.content) fullText = evt.content;
             if (evt.type === 'citations' && evt.citations) citations = evt.citations;
           } catch {
-            // ignore parse errors
+            // ignore
           }
         }
       }
@@ -185,7 +185,7 @@ export async function POST(req: Request) {
           mode,
           role: 'assistant',
           content: fullText,
-          citations: citations.map((url) => ({ url })),
+          citations,
         });
       }
     } catch {

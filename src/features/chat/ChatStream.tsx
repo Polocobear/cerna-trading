@@ -120,7 +120,7 @@ export function ChatStream({
               const evt = JSON.parse(part.slice(5).trim()) as {
                 type: string;
                 content?: string;
-                citations?: string[];
+                citations?: Array<{ url: string; title?: string; snippet?: string }>;
                 error?: string;
               };
               if (evt.type === 'token' && evt.content) {
@@ -130,7 +130,7 @@ export function ChatStream({
                 }
                 setText((prev) => prev + evt.content);
               } else if (evt.type === 'citations' && evt.citations) {
-                setCitations(evt.citations.map((url) => ({ url })));
+                setCitations(evt.citations);
               } else if (evt.type === 'error') {
                 setError(evt.error ?? 'Stream error');
                 setStatus('error');
