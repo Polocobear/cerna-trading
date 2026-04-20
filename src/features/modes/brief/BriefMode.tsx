@@ -4,9 +4,15 @@ import { useState } from 'react';
 import { Newspaper } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
-import type { ModeControls } from '@/types/chat';
+import type { ChatMessage, ModeControls } from '@/types/chat';
 
-export function BriefMode({ sessionId }: { sessionId: string }) {
+export function BriefMode({
+  sessionId,
+  initialMessages = [],
+}: {
+  sessionId: string;
+  initialMessages?: ChatMessage[];
+}) {
   const [scope, setScope] = useState<'holdings' | 'watchlist'>('holdings');
   const [depth, setDepth] = useState<'quick' | 'deep'>('quick');
   const [trigger, setTrigger] = useState(0);
@@ -72,7 +78,7 @@ export function BriefMode({ sessionId }: { sessionId: string }) {
         </button>
       </div>
 
-      {trigger === 0 ? (
+      {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
           Icon={Newspaper}
           title="Your morning brief"
@@ -84,6 +90,7 @@ export function BriefMode({ sessionId }: { sessionId: string }) {
           controls={controls}
           trigger={trigger}
           sessionId={sessionId}
+          initialMessages={initialMessages}
           followUps={[
             'Which stock has the biggest news today?',
             'Any action items I should act on now?',

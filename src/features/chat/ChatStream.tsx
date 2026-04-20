@@ -4,11 +4,13 @@ import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
-import type { Citation, ModeControls, SonarMode } from '@/types/chat';
+import type { ChatMessage, Citation, ModeControls, SonarMode } from '@/types/chat';
 import { CitationCard } from './CitationCard';
 import { FollowUpChips } from './FollowUpChips';
 import { ProgressTracker } from './ProgressTracker';
 import { Skeleton } from './Skeleton';
+import { HistoricalMessages } from './HistoricalMessages';
+import { Clock } from 'lucide-react';
 
 interface ChatStreamProps {
   mode: SonarMode;
@@ -18,6 +20,7 @@ interface ChatStreamProps {
   message?: string;
   followUps?: string[];
   onFollowUp?: (msg: string) => void;
+  initialMessages?: ChatMessage[];
 }
 
 type Status = 'idle' | 'searching' | 'streaming' | 'done' | 'error';
@@ -56,11 +59,13 @@ export function ChatStream({
   message,
   followUps = [],
   onFollowUp,
+  initialMessages = [],
 }: ChatStreamProps) {
   const [text, setText] = useState('');
   const [citations, setCitations] = useState<Citation[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [rateLimited, setRateLimited] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -74,6 +79,7 @@ export function ChatStream({
     setText('');
     setCitations([]);
     setError(null);
+    setRateLimited(false);
     setStatus('searching');
 
     async function run() {
@@ -85,6 +91,11 @@ export function ChatStream({
           signal: controller.signal,
         });
 
+        if (res.status === 429) {
+          setRateLimited(true);
+          setStatus('error');
+          return;
+        }
         if (!res.ok || !res.body) {
           const body = await res.text().catch(() => 'Request failed');
           setError(body);
@@ -145,8 +156,14 @@ export function ChatStream({
   // Split text on [N] citation markers to render badges inline
   const citationRegex = /\[(\d+)\]/g;
 
+  const hasNew = trigger > 0 && (!!text || status !== 'idle');
+
   return (
     <div className="mt-4 animate-fade-in">
+      {initialMessages.length > 0 && (
+        <HistoricalMessages messages={initialMessages} hasNew={hasNew} />
+      )}
+
       {status === 'searching' && !text && (
         <>
           <div className="flex items-center gap-2 text-sm text-cerna-text-secondary py-3">
@@ -181,7 +198,17 @@ export function ChatStream({
         </div>
       )}
 
-      {status === 'error' && error && (
+      {status === 'error' && rateLimited && (
+        <div className="mt-3 glass rounded-lg p-5 flex flex-col items-center text-center">
+          <Clock size={32} className="text-amber-500 mb-2" />
+          <div className="text-sm font-semibold text-cerna-text-primary">Slow down</div>
+          <div className="text-sm text-cerna-text-secondary mt-1 max-w-sm">
+            You&apos;re going too fast. Please wait a moment before your next query.
+          </div>
+        </div>
+      )}
+
+      {status === 'error' && !rateLimited && error && (
         <div className="mt-3 glass rounded-lg p-5 flex flex-col items-center text-center">
           <AlertTriangle size={32} className="text-amber-500 mb-2" />
           <div className="text-sm font-semibold text-cerna-text-primary">Analysis unavailable</div>

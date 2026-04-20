@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
-import type { ModeControls } from '@/types/chat';
+import type { ChatMessage, ModeControls } from '@/types/chat';
 import type { Position, WatchlistItem } from '@/types/portfolio';
 
 interface AnalyzeModeProps {
@@ -12,9 +12,16 @@ interface AnalyzeModeProps {
   initialTicker?: string;
   positions: Position[];
   watchlist: WatchlistItem[];
+  initialMessages?: ChatMessage[];
 }
 
-export function AnalyzeMode({ sessionId, initialTicker = '', positions, watchlist }: AnalyzeModeProps) {
+export function AnalyzeMode({
+  sessionId,
+  initialTicker = '',
+  positions,
+  watchlist,
+  initialMessages = [],
+}: AnalyzeModeProps) {
   const [ticker, setTicker] = useState(initialTicker);
   const [analysisType, setAnalysisType] = useState<'thesis' | 'peers' | 'fundamentals'>('thesis');
   const [trigger, setTrigger] = useState(0);
@@ -95,7 +102,7 @@ export function AnalyzeMode({ sessionId, initialTicker = '', positions, watchlis
         </button>
       </div>
 
-      {trigger === 0 ? (
+      {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
           Icon={BarChart3}
           title="Analyze any position"
@@ -108,6 +115,7 @@ export function AnalyzeMode({ sessionId, initialTicker = '', positions, watchlis
           trigger={trigger}
           sessionId={sessionId}
           message={message}
+          initialMessages={initialMessages}
           followUps={[
             'What would change my mind?',
             'Compare to sector peers',

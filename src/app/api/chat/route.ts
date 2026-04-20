@@ -7,6 +7,7 @@ import type { ChatRequest } from '@/types/chat';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import type { SonarMessage } from '@/types/sonar';
 import { getCachedPrice, setCachedPrice } from '@/lib/prices/cache';
+import { checkRateLimit } from '@/lib/sonar/rate-limit';
 
 async function enrichWithPrices(positions: Position[]): Promise<Position[]> {
   if (positions.length === 0) return positions;
@@ -82,6 +83,14 @@ export async function POST(req: Request) {
 
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const rate = checkRateLimit(user.id);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      { error: 'Too many requests. Please wait a moment.' },
+      { status: 429, headers: { 'Retry-After': String(rate.retryAfter ?? 30) } }
+    );
   }
 
   const [positionsRes, profileRes, watchlistRes, messagesRes] = await Promise.all([

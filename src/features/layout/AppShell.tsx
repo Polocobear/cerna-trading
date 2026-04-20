@@ -6,6 +6,7 @@ import { LogOut, Wallet, History } from 'lucide-react';
 import { ModeBar } from './ModeBar';
 import { ContextPanel } from '@/features/context-panel/ContextPanel';
 import { SessionSidebar, type SessionSummary } from '@/features/chat/SessionSidebar';
+import { useSessionMessages } from '@/lib/sessions/use-session-messages';
 import { ScreenMode } from '@/features/modes/screen/ScreenMode';
 import { AnalyzeMode } from '@/features/modes/analyze/AnalyzeMode';
 import { BriefMode } from '@/features/modes/brief/BriefMode';
@@ -56,6 +57,8 @@ export function AppShell(props: AppShellProps) {
     setSessionKey((k) => k + 1);
     setHistoryOpen(false);
   }
+
+  const { messages: historyMessages } = useSessionMessages(activeSessionId ?? null);
 
   const selectTicker = useCallback((ticker: string) => {
     setAnalyzeTicker(ticker);
@@ -167,7 +170,9 @@ export function AppShell(props: AppShellProps) {
 
       <div className="flex flex-1 overflow-hidden">
         <main className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 pb-24 lg:pb-6">
-          {mode === 'screen' && <ScreenMode key={sessionId} sessionId={sessionId} />}
+          {mode === 'screen' && (
+            <ScreenMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+          )}
           {mode === 'analyze' && (
             <AnalyzeMode
               key={sessionId}
@@ -175,9 +180,12 @@ export function AppShell(props: AppShellProps) {
               initialTicker={analyzeTicker}
               positions={positions}
               watchlist={watchlist}
+              initialMessages={historyMessages}
             />
           )}
-          {mode === 'brief' && <BriefMode key={sessionId} sessionId={sessionId} />}
+          {mode === 'brief' && (
+            <BriefMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+          )}
           {mode === 'portfolio' && (
             <PortfolioMode
               positions={positions}
@@ -191,7 +199,9 @@ export function AppShell(props: AppShellProps) {
               onRemoveWatch={removeWatch}
             />
           )}
-          {mode === 'ask' && <AskMode key={sessionId} sessionId={sessionId} />}
+          {mode === 'ask' && (
+            <AskMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+          )}
         </main>
 
         <ContextPanel

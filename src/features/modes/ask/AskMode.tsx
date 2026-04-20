@@ -10,7 +10,15 @@ const SUGGESTIONS = [
   'How do I read a balance sheet?',
 ];
 
-export function AskMode({ sessionId }: { sessionId: string }) {
+import type { ChatMessage } from '@/types/chat';
+
+export function AskMode({
+  sessionId,
+  initialMessages = [],
+}: {
+  sessionId: string;
+  initialMessages?: ChatMessage[];
+}) {
   const [input, setInput] = useState('');
   const [activeMessage, setActiveMessage] = useState<string | undefined>(undefined);
   const [trigger, setTrigger] = useState(0);
@@ -24,7 +32,7 @@ export function AskMode({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="max-w-3xl mx-auto flex flex-col min-h-[60vh]">
-      {trigger === 0 && (
+      {trigger === 0 && initialMessages.length === 0 && (
         <div className="flex-1 flex flex-col items-center justify-center py-12 text-center animate-fade-in">
           <h2 className="text-xl font-semibold mb-1">Ask anything about investing.</h2>
           <p className="text-cerna-text-secondary mb-8">Portfolio-aware where relevant.</p>
@@ -42,12 +50,13 @@ export function AskMode({ sessionId }: { sessionId: string }) {
         </div>
       )}
 
-      {trigger > 0 && (
+      {(trigger > 0 || initialMessages.length > 0) && (
         <ChatStream
           mode="ask"
           trigger={trigger}
           sessionId={sessionId}
           message={activeMessage}
+          initialMessages={initialMessages}
           followUps={['Tell me more', 'Give an example', 'Relate this to my portfolio']}
           onFollowUp={send}
         />

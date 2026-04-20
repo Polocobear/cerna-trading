@@ -2,8 +2,22 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Cerna Trading',
-  description: 'Portfolio-aware trading intelligence for ASX retail investors',
+  title: 'Cerna Trading — Intelligent Portfolio Analysis',
+  description:
+    'AI-powered trading intelligence for ASX investors. Portfolio-aware analysis, value screening, and morning briefs powered by real-time data.',
+  keywords: ['ASX', 'trading', 'portfolio', 'SMSF', 'stock analysis', 'value investing'],
+  openGraph: {
+    title: 'Cerna Trading',
+    description: 'AI-powered trading intelligence for ASX investors',
+    type: 'website',
+  },
+  robots: {
+    index: false,
+    follow: false,
+  },
+  icons: {
+    icon: '/icon.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

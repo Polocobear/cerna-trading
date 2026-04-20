@@ -4,12 +4,18 @@ import { useState } from 'react';
 import { Search } from 'lucide-react';
 import { ChatStream } from '@/features/chat/ChatStream';
 import { EmptyState } from '@/features/chat/EmptyState';
-import type { ModeControls } from '@/types/chat';
+import type { ChatMessage, ModeControls } from '@/types/chat';
 
 const SECTORS = ['All', 'Mining', 'Banking', 'Tech', 'Healthcare', 'Energy', 'Consumer', 'REIT'];
 const CAPS = ['All', 'Large ($5B+)', 'Mid ($500M-5B)', 'Small ($100-500M)'];
 
-export function ScreenMode({ sessionId }: { sessionId: string }) {
+export function ScreenMode({
+  sessionId,
+  initialMessages = [],
+}: {
+  sessionId: string;
+  initialMessages?: ChatMessage[];
+}) {
   const [sector, setSector] = useState('All');
   const [marketCap, setMarketCap] = useState('All');
   const [depth, setDepth] = useState<'quick' | 'deep'>('quick');
@@ -85,7 +91,7 @@ export function ScreenMode({ sessionId }: { sessionId: string }) {
         </button>
       </div>
 
-      {trigger === 0 ? (
+      {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
           Icon={Search}
           title="Screen the ASX for opportunities"
@@ -97,6 +103,7 @@ export function ScreenMode({ sessionId }: { sessionId: string }) {
           controls={controls}
           trigger={trigger}
           sessionId={sessionId}
+          initialMessages={initialMessages}
           followUps={[
             'Show cheapest one in detail',
             'Compare to my current holdings',
