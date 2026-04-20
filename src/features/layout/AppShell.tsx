@@ -1,20 +1,22 @@
 'use client';
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LogOut, Wallet, History } from 'lucide-react';
-import { ModeBar } from './ModeBar';
-import { ContextPanel } from '@/features/context-panel/ContextPanel';
-import { SessionSidebar, type SessionSummary } from '@/features/chat/SessionSidebar';
-import { useSessionMessages } from '@/lib/sessions/use-session-messages';
+import { LogOut, Menu } from 'lucide-react';
+import { Sidebar } from './Sidebar';
+import { MobileDrawer } from './MobileDrawer';
+import { AgentChat } from '@/features/chat/AgentChat';
 import { ScreenMode } from '@/features/modes/screen/ScreenMode';
 import { AnalyzeMode } from '@/features/modes/analyze/AnalyzeMode';
 import { BriefMode } from '@/features/modes/brief/BriefMode';
-import { AskMode } from '@/features/modes/ask/AskMode';
 import { PortfolioMode } from '@/features/modes/portfolio/PortfolioMode';
+import { useSessionMessages } from '@/lib/sessions/use-session-messages';
 import { createClient } from '@/lib/supabase/client';
+import type { SessionSummary } from '@/features/layout/SidebarHistory';
 import type { Position, WatchlistItem, JournalEntry, Profile } from '@/types/portfolio';
 import type { Mode } from '@/types/chat';
+
+export type ViewId = 'chat' | 'screen' | 'analyze' | 'brief' | 'portfolio';
 
 interface AppShellProps {
   initialProfile: Profile | null;
@@ -22,19 +24,23 @@ interface AppShellProps {
   initialWatchlist: WatchlistItem[];
   initialJournal: JournalEntry[];
   userEmail: string;
-  initialMode?: Mode;
+  initialView?: ViewId;
+}
+
+function viewToMode(view: ViewId): Mode {
+  if (view === 'chat') return 'ask';
+  return view;
 }
 
 export function AppShell(props: AppShellProps) {
   const router = useRouter();
-  const [mode, setMode] = useState<Mode>(props.initialMode ?? 'screen');
+  const [view, setView] = useState<ViewId>(props.initialView ?? 'chat');
   const [analyzeTicker, setAnalyzeTicker] = useState('');
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [positions, setPositions] = useState<Position[]>(props.initialPositions);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(props.initialWatchlist);
   const [journal] = useState<JournalEntry[]>(props.initialJournal);
 
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [sessionKey, setSessionKey] = useState(0);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined);
 
@@ -45,24 +51,31 @@ export function AppShell(props: AppShellProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionKey, activeSessionId]);
 
-  function handleSelectSession(s: SessionSummary) {
-    setMode(s.mode);
+  const { messages: historyMessages } = useSessionMessages(activeSessionId ?? null);
+
+  const handleSelectSession = useCallback((s: SessionSummary) => {
+    const v: ViewId = s.mode === 'ask' ? 'chat' : (s.mode as ViewId);
+    setView(v);
     setActiveSessionId(s.id);
     setSessionKey((k) => k + 1);
-    setHistoryOpen(false);
-  }
+    setMobileDrawerOpen(false);
+  }, []);
 
-  function handleNewChat() {
+  const handleNewChat = useCallback(() => {
+    setView('chat');
     setActiveSessionId(undefined);
     setSessionKey((k) => k + 1);
-    setHistoryOpen(false);
-  }
+    setMobileDrawerOpen(false);
+  }, []);
 
-  const { messages: historyMessages } = useSessionMessages(activeSessionId ?? null);
+  const handleSelectView = useCallback((v: ViewId) => {
+    setView(v);
+    setMobileDrawerOpen(false);
+  }, []);
 
   const selectTicker = useCallback((ticker: string) => {
     setAnalyzeTicker(ticker);
-    setMode('analyze');
+    setView('analyze');
   }, []);
 
   async function signOut() {
@@ -137,104 +150,104 @@ export function AppShell(props: AppShellProps) {
     if (res.ok) setWatchlist((prev) => prev.filter((w) => w.id !== id));
   }
 
+  const currentMode: Mode = viewToMode(view);
+
   return (
-    <div className="flex flex-col h-screen">
-      <header className="flex items-center justify-between px-5 py-3 border-b border-cerna-border bg-cerna-bg-secondary">
-        <div className="flex items-center gap-2">
+    <div className="flex h-screen bg-cerna-bg-primary">
+      <Sidebar
+        activeView={view}
+        onSelectView={handleSelectView}
+        onNewChat={handleNewChat}
+        onSelectSession={handleSelectSession}
+        activeSessionId={activeSessionId}
+        positions={positions}
+        cashAvailable={props.initialProfile?.cash_available ?? 0}
+      />
+
+      <MobileDrawer open={mobileDrawerOpen} onClose={() => setMobileDrawerOpen(false)}>
+        <Sidebar
+          activeView={view}
+          onSelectView={handleSelectView}
+          onNewChat={handleNewChat}
+          onSelectSession={handleSelectSession}
+          activeSessionId={activeSessionId}
+          positions={positions}
+          cashAvailable={props.initialProfile?.cash_available ?? 0}
+          variant="mobile"
+        />
+      </MobileDrawer>
+
+      <div className="flex flex-col flex-1 min-w-0">
+        <header className="flex items-center justify-between h-12 px-4 border-b border-cerna-border shrink-0">
           <button
-            onClick={() => setHistoryOpen(true)}
-            className="p-2 -ml-2 text-cerna-text-secondary hover:text-cerna-text-primary transition-smooth rounded-lg"
-            aria-label="Open chat history"
-            title="Chat history"
+            onClick={() => setMobileDrawerOpen(true)}
+            className="md:hidden p-2 -ml-2 text-cerna-text-secondary hover:text-cerna-text-primary transition-smooth rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Open menu"
           >
-            <History size={18} />
+            <Menu size={20} />
           </button>
-          <div className="w-8 h-8 rounded-lg bg-cerna-primary flex items-center justify-center text-white font-bold">
-            C
+          <div className="flex-1" />
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-cerna-text-tertiary hidden md:inline">{props.userEmail}</span>
+            <button
+              onClick={signOut}
+              className="flex items-center gap-1.5 text-cerna-text-secondary hover:text-cerna-text-primary transition-smooth"
+            >
+              <LogOut size={14} />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
           </div>
-          <span className="font-semibold tracking-tight">Cerna Trading</span>
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-cerna-text-tertiary hidden md:inline">{props.userEmail}</span>
-          <button
-            onClick={signOut}
-            className="flex items-center gap-1.5 text-cerna-text-secondary hover:text-cerna-text-primary transition"
-          >
-            <LogOut size={14} />
-            Sign out
-          </button>
-        </div>
-      </header>
+        </header>
 
-      <ModeBar active={mode} onChange={setMode} />
-
-      <div className="flex flex-1 overflow-hidden">
-        <main className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 pb-24 lg:pb-6">
-          {mode === 'screen' && (
-            <ScreenMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
-          )}
-          {mode === 'analyze' && (
-            <AnalyzeMode
+        <main className="flex-1 overflow-hidden relative">
+          {view === 'chat' && (
+            <AgentChat
               key={sessionId}
               sessionId={sessionId}
-              initialTicker={analyzeTicker}
-              positions={positions}
-              watchlist={watchlist}
+              mode={currentMode}
               initialMessages={historyMessages}
-            />
-          )}
-          {mode === 'brief' && (
-            <BriefMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
-          )}
-          {mode === 'portfolio' && (
-            <PortfolioMode
               positions={positions}
-              watchlist={watchlist}
-              journal={journal}
-              onAnalyze={selectTicker}
-              onAddPosition={addPosition}
-              onClosePosition={closePosition}
-              onDeletePosition={deletePosition}
-              onAddWatch={addWatch}
-              onRemoveWatch={removeWatch}
             />
           )}
-          {mode === 'ask' && (
-            <AskMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+          {view === 'screen' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
+              <ScreenMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+            </div>
+          )}
+          {view === 'analyze' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
+              <AnalyzeMode
+                key={sessionId}
+                sessionId={sessionId}
+                initialTicker={analyzeTicker}
+                positions={positions}
+                watchlist={watchlist}
+                initialMessages={historyMessages}
+              />
+            </div>
+          )}
+          {view === 'brief' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
+              <BriefMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
+            </div>
+          )}
+          {view === 'portfolio' && (
+            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
+              <PortfolioMode
+                positions={positions}
+                watchlist={watchlist}
+                journal={journal}
+                onAnalyze={selectTicker}
+                onAddPosition={addPosition}
+                onClosePosition={closePosition}
+                onDeletePosition={deletePosition}
+                onAddWatch={addWatch}
+                onRemoveWatch={removeWatch}
+              />
+            </div>
           )}
         </main>
-
-        <ContextPanel
-          positions={positions}
-          watchlist={watchlist}
-          journal={journal}
-          cashAvailable={props.initialProfile?.cash_available ?? 0}
-          onSelectTicker={(t) => {
-            selectTicker(t);
-            setDrawerOpen(false);
-          }}
-          activeTicker={analyzeTicker}
-          mobileOpen={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-        />
       </div>
-
-      {/* Mobile FAB */}
-      <button
-        onClick={() => setDrawerOpen(true)}
-        className="lg:hidden fixed bottom-5 right-5 z-40 w-12 h-12 rounded-full bg-cerna-primary hover:bg-cerna-primary-hover text-white flex items-center justify-center glow-primary transition-smooth"
-        aria-label="Open portfolio panel"
-      >
-        <Wallet size={20} />
-      </button>
-
-      <SessionSidebar
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-        onSelect={handleSelectSession}
-        onNewChat={handleNewChat}
-        activeSessionId={activeSessionId}
-      />
     </div>
   );
 }
