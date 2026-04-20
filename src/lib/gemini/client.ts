@@ -5,7 +5,7 @@ const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // DEEP:     Gemini 3.1 Pro — paid frontier reasoning for deep analysis
 const MODELS = {
   standard: 'gemini-2.5-pro',
-  deep: 'gemini-3.1-pro',
+  deep: 'gemini-3.1-pro-preview',
 } as const;
 
 export type ModelTier = keyof typeof MODELS;
