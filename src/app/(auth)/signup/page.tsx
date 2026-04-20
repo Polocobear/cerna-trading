@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
+import { OAuthButtons } from '@/features/auth/OAuthButtons';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -55,6 +56,8 @@ export default function SignupPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="rounded-2xl glass-elevated p-6 space-y-4">
+          <OAuthButtons mode="signup" />
+
           <div>
             <label className="block text-sm font-medium text-cerna-text-secondary mb-1.5">
               Display name

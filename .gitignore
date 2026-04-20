@@ -10,3 +10,5 @@ dist
 .vscode
 .idea
 next-env.d.ts
+
+.vercel
