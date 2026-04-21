@@ -1,12 +1,20 @@
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
-import { AppShell } from '@/features/layout/AppShell';
+import { AppShell, type ViewId } from '@/features/layout/AppShell';
 import type { Position, WatchlistItem, JournalEntry, Profile } from '@/types/portfolio';
 
 export const dynamic = 'force-dynamic';
 
 interface DashboardPageProps {
-  searchParams: { mode?: string };
+  searchParams: { mode?: string; view?: string };
+}
+
+const VALID_VIEWS: readonly ViewId[] = ['chat', 'screen', 'analyze', 'brief', 'portfolio'] as const;
+
+function resolveInitialView(raw: string | undefined): ViewId {
+  if (raw === 'ask') return 'chat';
+  if (raw && (VALID_VIEWS as readonly string[]).includes(raw)) return raw as ViewId;
+  return 'chat';
 }
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
@@ -50,11 +58,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const journal = (journalRes.data ?? []) as JournalEntry[];
   const profile = (profileRes.data ?? null) as Profile | null;
 
-  const validModes = ['screen', 'analyze', 'brief', 'portfolio', 'ask'] as const;
-  type ValidMode = (typeof validModes)[number];
-  const initialMode: ValidMode = (validModes as readonly string[]).includes(searchParams.mode ?? '')
-    ? (searchParams.mode as ValidMode)
-    : 'screen';
+  const initialView = resolveInitialView(searchParams.view ?? searchParams.mode);
 
   return (
     <AppShell
@@ -63,7 +67,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       initialWatchlist={watchlist}
       initialJournal={journal}
       userEmail={user.email ?? ''}
-      initialMode={initialMode}
+      initialView={initialView}
     />
   );
 }
