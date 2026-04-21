@@ -1,6 +1,6 @@
 'use client';
 
-import { MessageSquare, Search, BarChart3, Newspaper, Wallet, Plus } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Wallet, Plus } from 'lucide-react';
 import type { ViewId } from './AppShell';
 import { SidebarHistory, type SessionSummary } from './SidebarHistory';
 import { SidebarPortfolio } from './SidebarPortfolio';
@@ -27,10 +27,8 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { id: 'dashboard', label: 'Dashboard', Icon: LayoutDashboard },
   { id: 'chat', label: 'Chat', Icon: MessageSquare },
-  { id: 'screen', label: 'Screen', Icon: Search },
-  { id: 'analyze', label: 'Analyze', Icon: BarChart3 },
-  { id: 'brief', label: 'Brief', Icon: Newspaper },
   { id: 'portfolio', label: 'Portfolio', Icon: Wallet },
 ];
 

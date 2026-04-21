@@ -9,12 +9,13 @@ interface DashboardPageProps {
   searchParams: { mode?: string; view?: string };
 }
 
-const VALID_VIEWS: readonly ViewId[] = ['chat', 'screen', 'analyze', 'brief', 'portfolio'] as const;
+const VALID_VIEWS: readonly ViewId[] = ['dashboard', 'chat', 'portfolio'] as const;
 
 function resolveInitialView(raw: string | undefined): ViewId {
   if (raw === 'ask') return 'chat';
+  if (raw === 'screen' || raw === 'analyze' || raw === 'brief') return 'chat';
   if (raw && (VALID_VIEWS as readonly string[]).includes(raw)) return raw as ViewId;
-  return 'chat';
+  return 'dashboard';
 }
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {

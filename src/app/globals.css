@@ -68,6 +68,39 @@
   --smsf-note-bg: rgba(255, 200, 50, 0.1);
   --smsf-note-border: rgba(255, 200, 50, 0.5);
   --agent-shimmer: linear-gradient(90deg, transparent 0%, rgba(124, 91, 240, 0.15) 50%, transparent 100%);
+
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(255, 255, 255, 0.06);
+  --card-border-hover: rgba(255, 255, 255, 0.1);
+  --card-divider: rgba(255, 255, 255, 0.04);
+  --positive: #22c55e;
+  --negative: #ef4444;
+  --warning: #f59e0b;
+  --analyst-buy: #22c55e;
+  --analyst-hold: rgba(255, 255, 255, 0.3);
+  --analyst-sell: #ef4444;
+  --earnings-imminent: #ef4444;
+  --earnings-soon: #f59e0b;
+  --earnings-later: rgba(255, 255, 255, 0.4);
+  --indicator-oversold: #22c55e;
+  --indicator-overbought: #ef4444;
+  --indicator-neutral: rgba(255, 255, 255, 0.4);
+  --dashboard-text-strong: rgba(255, 255, 255, 0.96);
+  --dashboard-text-muted: rgba(255, 255, 255, 0.6);
+  --dashboard-text-35: rgba(255, 255, 255, 0.35);
+  --dashboard-text-45: rgba(255, 255, 255, 0.45);
+  --dashboard-text-50: rgba(255, 255, 255, 0.5);
+  --dashboard-text-55: rgba(255, 255, 255, 0.55);
+  --dashboard-text-60: rgba(255, 255, 255, 0.6);
+  --dashboard-text-65: rgba(255, 255, 255, 0.65);
+  --dashboard-text-70: rgba(255, 255, 255, 0.7);
+  --dashboard-text-72: rgba(255, 255, 255, 0.72);
+  --dashboard-text-75: rgba(255, 255, 255, 0.75);
+  --dashboard-strip-bg: rgba(255, 255, 255, 0.03);
+  --dashboard-strip-border: rgba(255, 255, 255, 0.06);
+  --dashboard-surface-04: rgba(255, 255, 255, 0.04);
+  --dashboard-surface-05: rgba(255, 255, 255, 0.05);
+  --dashboard-surface-08: rgba(255, 255, 255, 0.08);
 }
 
 /* Phase 7A — Sidebar responsive behavior
@@ -252,6 +285,155 @@ html, body {
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.03) 25%,
+    rgba(255,255,255,0.06) 50%,
+    rgba(255,255,255,0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-card-in {
+  animation: card-in 280ms ease-out both;
+}
+
+@keyframes section-reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-section-reveal {
+  animation: section-reveal 200ms ease-out both;
+}
+
+@keyframes sparkline-draw {
+  from { stroke-dashoffset: 1000; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes earnings-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.dashboard-summary-strip {
+  width: 100%;
+  padding: 16px 20px;
+  border-radius: 16px;
+  background: var(--dashboard-strip-bg);
+  border: 1px solid var(--dashboard-strip-border);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.18);
+}
+
+.dashboard-card {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.02) 100%),
+    var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 16px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: border-color 200ms ease, transform 200ms ease, box-shadow 200ms ease;
+}
+.dashboard-card:hover {
+  border-color: var(--card-border-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.18);
+}
+
+.dashboard-card-divider {
+  height: 1px;
+  width: 100%;
+  margin: 12px 0;
+  background: var(--card-divider);
+}
+
+.dashboard-section-heading {
+  color: var(--dashboard-text-strong);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dashboard-kicker {
+  color: rgba(255,255,255,0.38);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dashboard-earnings-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.dashboard-warning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245,158,11,0.12);
+  color: var(--warning);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.dashboard-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.06);
+  background: rgba(124,91,240,0.15);
+  color: var(--color-primary);
+  transition: all 200ms ease;
+}
+.dashboard-action-button:hover {
+  border-color: var(--card-border-hover);
+  transform: translateY(-1px);
+}
+
+.dashboard-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(124,91,240,0.2);
+  background: rgba(124,91,240,0.15);
+  color: var(--color-primary);
+  transition: all 200ms ease;
+}
+.dashboard-link-button:hover {
+  border-color: rgba(124,91,240,0.32);
+  box-shadow: 0 0 20px rgba(124,91,240,0.14);
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Stagger */

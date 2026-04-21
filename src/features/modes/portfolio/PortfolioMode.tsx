@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Wallet, Eye, BookOpen, TrendingUp, TrendingDown } from 'lucide-react';
 import { EmptyState } from '@/features/chat/EmptyState';
 import type { Position, WatchlistItem, JournalEntry } from '@/types/portfolio';
@@ -27,6 +27,8 @@ interface PortfolioModeProps {
   onDeletePosition: (id: string) => Promise<void>;
   onAddWatch: (data: { ticker: string; target_price?: number; notes?: string }) => Promise<void>;
   onRemoveWatch: (id: string) => Promise<void>;
+  requestedAction?: 'connect-ib' | 'add-position' | null;
+  onActionHandled?: () => void;
 }
 
 type Tab = 'positions' | 'watchlist' | 'journal';
@@ -48,6 +50,15 @@ export function PortfolioMode(props: PortfolioModeProps) {
 
   const openTickers = props.positions.filter((p) => p.status === 'open').map((p) => p.ticker);
   const { prices, isLoading: pricesLoading } = usePrices(openTickers);
+
+  useEffect(() => {
+    if (!props.requestedAction) return;
+    setTab('positions');
+    if (props.requestedAction === 'add-position') {
+      setShowForm(true);
+    }
+    props.onActionHandled?.();
+  }, [props.onActionHandled, props.requestedAction]);
 
   const totals = props.positions.reduce(
     (acc, p) => {
