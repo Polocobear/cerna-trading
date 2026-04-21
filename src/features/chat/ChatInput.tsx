@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, Zap } from 'lucide-react';
-import { useDeepRemaining } from '@/lib/gemini/use-deep-remaining';
 import { cn } from '@/lib/utils/cn';
 
 interface ChatInputProps {
   onSend: (message: string, depth: 'standard' | 'deep') => void;
   disabled?: boolean;
   placeholder?: string;
+  depth?: 'standard' | 'deep';
+  onDepthChange?: (depth: 'standard' | 'deep') => void;
+  deepRemaining?: number | null;
 }
 
 const MAX_LINES = 4;
@@ -22,12 +24,27 @@ function detectTouch(): boolean {
   );
 }
 
-export function ChatInput({ onSend, disabled, placeholder = 'Ask anything about ASX...' }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  disabled,
+  placeholder = 'Ask anything about ASX...',
+  depth: controlledDepth,
+  onDepthChange,
+  deepRemaining = null,
+}: ChatInputProps) {
   const [value, setValue] = useState('');
-  const [depth, setDepth] = useState<'standard' | 'deep'>('standard');
+  const [uncontrolledDepth, setUncontrolledDepth] = useState<'standard' | 'deep'>('standard');
   const [isTouch, setIsTouch] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { remaining: deepRemaining } = useDeepRemaining();
+
+  const depth = controlledDepth ?? uncontrolledDepth;
+  const setDepth = useCallback(
+    (d: 'standard' | 'deep') => {
+      if (onDepthChange) onDepthChange(d);
+      else setUncontrolledDepth(d);
+    },
+    [onDepthChange]
+  );
 
   useEffect(() => {
     setIsTouch(detectTouch());

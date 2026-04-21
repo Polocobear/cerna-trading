@@ -14,8 +14,6 @@ import { useSessionMessages } from '@/lib/sessions/use-session-messages';
 import { createClient } from '@/lib/supabase/client';
 import type { SessionSummary } from '@/features/layout/SidebarHistory';
 import type { Position, WatchlistItem, JournalEntry, Profile } from '@/types/portfolio';
-import type { Mode } from '@/types/chat';
-
 export type ViewId = 'chat' | 'screen' | 'analyze' | 'brief' | 'portfolio';
 
 interface AppShellProps {
@@ -25,11 +23,6 @@ interface AppShellProps {
   initialJournal: JournalEntry[];
   userEmail: string;
   initialView?: ViewId;
-}
-
-function viewToMode(view: ViewId): Mode {
-  if (view === 'chat') return 'ask';
-  return view;
 }
 
 export function AppShell(props: AppShellProps) {
@@ -150,8 +143,6 @@ export function AppShell(props: AppShellProps) {
     if (res.ok) setWatchlist((prev) => prev.filter((w) => w.id !== id));
   }
 
-  const currentMode: Mode = viewToMode(view);
-
   return (
     <div className="flex h-screen bg-cerna-bg-primary">
       <Sidebar
@@ -204,9 +195,9 @@ export function AppShell(props: AppShellProps) {
             <AgentChat
               key={sessionId}
               sessionId={sessionId}
-              mode={currentMode}
               initialMessages={historyMessages}
               positions={positions}
+              watchlist={watchlist}
             />
           )}
           {view === 'screen' && (

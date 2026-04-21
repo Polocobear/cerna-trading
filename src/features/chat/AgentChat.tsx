@@ -1,111 +1,107 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Search, BarChart3, Newspaper, Wallet } from 'lucide-react';
-import type { ChatMessage, Citation, Mode } from '@/types/chat';
+import type { ChatMessage } from '@/types/chat';
 import type { Position } from '@/types/portfolio';
+import { useAgentChat, type AgentStatus as HookAgentStatus, type AgentChatMessage } from '@/lib/agents/use-agent-chat';
+import type { AgentName } from '@/lib/agents/types';
 import { CitationCard } from './CitationCard';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
-import { SuggestionChips } from './SuggestionChips';
-import { AgentStatusCard, type AgentStatus } from './AgentStatusCard';
-import { ActionBlock } from './ActionBlock';
+import { SuggestionChips, getDefaultSuggestions } from './SuggestionChips';
+import { AgentStatusCard, type AgentStatus as UIAgentStatus } from './AgentStatusCard';
 
 interface AgentChatProps {
   sessionId: string;
-  mode: Mode;
   initialMessages?: ChatMessage[];
   positions: Position[];
+  watchlist?: { ticker: string }[];
+  onSessionTitle?: (title: string) => void;
 }
 
-type Status = 'idle' | 'agents' | 'streaming' | 'done' | 'error';
+const AGENT_ICONS: Record<AgentName, typeof Search> = {
+  screen: Search,
+  analyze: BarChart3,
+  brief: Newspaper,
+  portfolio: Wallet,
+};
 
-interface LocalMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  createdAt: string;
-  citations?: Citation[];
-}
+const AGENT_LABELS: Record<AgentName, string> = {
+  screen: 'ASX Screener',
+  analyze: 'Fundamentals Agent',
+  brief: 'Market Brief',
+  portfolio: 'Portfolio Agent',
+};
 
-const ACTION_BLOCK_REGEX = /<action-block>([\s\S]*?)<\/action-block>/g;
-
-function toLocal(m: ChatMessage): LocalMessage {
+function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
   return {
     id: m.id,
     role: m.role,
     content: m.content,
     createdAt: m.created_at,
-    citations: m.citations ?? undefined,
+    sources: (m.citations ?? []).map((c) => ({
+      title: c.title ?? '',
+      url: c.url,
+      domain: c.domain ?? (() => {
+        try {
+          return new URL(c.url).hostname.replace(/^www\./, '');
+        } catch {
+          return c.url;
+        }
+      })(),
+    })),
   };
 }
 
-function baseSuggestions(hasPositions: boolean, topHolding?: string): string[] {
-  const base = [
-    "What's moving on ASX today?",
-    'Screen for dividend stocks',
-    'Analyze CBA fundamentals',
-    "How's my portfolio looking?",
-  ];
-  if (hasPositions && topHolding) {
-    return [
-      `Should I hold ${topHolding}?`,
-      'Screen for dividend stocks',
-      'Analyze CBA fundamentals',
-      "How's my portfolio looking?",
-    ];
-  }
-  return base;
+function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
+  // AgentStatusCard only knows 'running' | 'complete' — collapse pending→running for visual simplicity,
+  // and error→complete with an error note.
+  const state: 'running' | 'complete' = s.status === 'complete' || s.status === 'error' ? 'complete' : 'running';
+  const completionNote =
+    s.status === 'error'
+      ? s.error
+      : s.status === 'complete'
+      ? s.summary
+      : undefined;
+  return {
+    id: s.name,
+    name: AGENT_LABELS[s.name],
+    description: s.description,
+    Icon: AGENT_ICONS[s.name],
+    state,
+    completionNote,
+  };
 }
 
-function mockAgentsForMode(mode: Mode): AgentStatus[] {
-  if (mode === 'screen') {
-    return [
-      { id: 'screener', name: 'ASX Screener', description: 'Scanning ASX-listed equities…', Icon: Search, state: 'running' },
-    ];
-  }
-  if (mode === 'analyze') {
-    return [
-      { id: 'analyst', name: 'Fundamentals Agent', description: 'Gathering financial data…', Icon: BarChart3, state: 'running' },
-    ];
-  }
-  if (mode === 'brief') {
-    return [
-      { id: 'brief', name: 'Morning Brief', description: 'Scanning overnight news…', Icon: Newspaper, state: 'running' },
-    ];
-  }
-  if (mode === 'portfolio') {
-    return [
-      { id: 'portfolio', name: 'Portfolio Agent', description: 'Analyzing your holdings…', Icon: Wallet, state: 'running' },
-    ];
-  }
-  return [
-    { id: 'research', name: 'Research Agent', description: 'Searching sources…', Icon: Search, state: 'running' },
-  ];
-}
+export function AgentChat({ sessionId, initialMessages = [], positions, watchlist = [], onSessionTitle }: AgentChatProps) {
+  const [depth, setDepth] = useState<'standard' | 'deep'>('standard');
+  const {
+    messages,
+    agentStatuses,
+    isLoading,
+    isStreaming,
+    deepRemaining,
+    sessionTitle,
+    error,
+    sendMessage,
+    loadSession,
+  } = useAgentChat({ sessionId, depth });
 
-export function AgentChat({ sessionId, mode, initialMessages = [], positions }: AgentChatProps) {
-  const [messages, setMessages] = useState<LocalMessage[]>(initialMessages.map(toLocal));
-  const [status, setStatus] = useState<Status>('idle');
-  const [streamText, setStreamText] = useState('');
-  const [streamCitations, setStreamCitations] = useState<Citation[]>([]);
-  const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const lastSentRef = useRef<string>('');
 
+  // When initialMessages arrive (session loaded from history), push them into the hook.
   useEffect(() => {
-    setMessages(initialMessages.map(toLocal));
+    loadSession(initialMessages.map(chatMessageToAgent));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessages]);
 
-  const topHolding = useMemo(() => {
-    const open = positions.filter((p) => p.status === 'open');
-    return open[0]?.ticker;
-  }, [positions]);
-
-  const suggestions = baseSuggestions(positions.length > 0, topHolding);
+  // Relay session titles up (for history sidebar refresh).
+  useEffect(() => {
+    if (sessionTitle && onSessionTitle) onSessionTitle(sessionTitle);
+  }, [sessionTitle, onSessionTitle]);
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -115,7 +111,7 @@ export function AgentChat({ sessionId, mode, initialMessages = [], positions }: 
 
   useEffect(() => {
     if (autoScroll) scrollToBottom();
-  }, [messages, streamText, agents, autoScroll, scrollToBottom]);
+  }, [messages, agentStatuses, autoScroll, scrollToBottom]);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -124,117 +120,37 @@ export function AgentChat({ sessionId, mode, initialMessages = [], positions }: 
     setAutoScroll(atBottom);
   }
 
-  const send = useCallback(
-    async (message: string, depth: 'standard' | 'deep') => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      const userMsg: LocalMessage = {
-        id: `u-${Date.now()}`,
-        role: 'user',
-        content: message,
-        createdAt: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, userMsg]);
-      setStreamText('');
-      setStreamCitations([]);
-      setStatus('agents');
-      setAutoScroll(true);
-      const initialAgents = mockAgentsForMode(mode);
-      setAgents(initialAgents);
-
-      const sonarMode = mode === 'portfolio' ? 'analyze' : mode;
-
-      try {
-        const res = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            mode: sonarMode,
-            controls: { depth: depth === 'deep' ? 'deep' : 'quick' },
-            message,
-            sessionId,
-          }),
-          signal: controller.signal,
-        });
-
-        if (!res.ok || !res.body) {
-          setStatus('error');
-          setAgents((prev) => prev.map((a) => ({ ...a, state: 'complete', completionNote: 'Failed' })));
-          return;
-        }
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let accum = '';
-        let firstToken = false;
-        let gotCitations: Citation[] = [];
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() ?? '';
-          for (const part of parts) {
-            if (!part.startsWith('data:')) continue;
-            try {
-              const evt = JSON.parse(part.slice(5).trim()) as {
-                type: string;
-                content?: string;
-                citations?: Array<{ url: string; title?: string; snippet?: string }>;
-              };
-              if (evt.type === 'token' && evt.content) {
-                if (!firstToken) {
-                  firstToken = true;
-                  setStatus('streaming');
-                  setAgents((prev) => prev.map((a) => ({ ...a, state: 'complete', completionNote: `${a.name} complete` })));
-                }
-                accum += evt.content;
-                setStreamText(accum);
-              } else if (evt.type === 'citations' && evt.citations) {
-                gotCitations = evt.citations;
-                setStreamCitations(evt.citations);
-              }
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            content: accum,
-            createdAt: new Date().toISOString(),
-            citations: gotCitations,
-          },
-        ]);
-        setStreamText('');
-        setStreamCitations([]);
-        setAgents([]);
-        setStatus('done');
-      } catch (err) {
-        if ((err as Error).name === 'AbortError') return;
-        setStatus('error');
-      }
-    },
-    [mode, sessionId]
+  const suggestions = useMemo(
+    () => getDefaultSuggestions(positions, watchlist),
+    [positions, watchlist]
   );
 
-  const isEmpty = messages.length === 0 && status === 'idle';
+  const handleSend = useCallback(
+    async (text: string, sendDepth: 'standard' | 'deep') => {
+      setDepth(sendDepth);
+      lastSentRef.current = text;
+      setAutoScroll(true);
+      await sendMessage(text);
+    },
+    [sendMessage]
+  );
+
+  const retry = useCallback(() => {
+    if (lastSentRef.current) void sendMessage(lastSentRef.current);
+  }, [sendMessage]);
+
+  const isEmpty = messages.length === 0 && !isStreaming && !isLoading;
+
+  // Agent cards visible while we have statuses and any are not yet complete/error.
+  const showAgentCards =
+    agentStatuses.length > 0 &&
+    agentStatuses.some((s) => s.status !== 'complete' && s.status !== 'error');
+  const allComplete =
+    agentStatuses.length > 0 && agentStatuses.every((s) => s.status === 'complete' || s.status === 'error');
 
   return (
     <div className="flex flex-col h-full">
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        className="flex-1 overflow-y-auto custom-scrollbar"
-      >
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto custom-scrollbar">
         {isEmpty ? (
           <div className="min-h-full flex items-center justify-center px-4 py-10">
             <div className="w-full max-w-[640px]">
@@ -247,88 +163,115 @@ export function AgentChat({ sessionId, mode, initialMessages = [], positions }: 
               <div className="mt-6">
                 <SuggestionChips
                   suggestions={suggestions}
-                  onSelect={(s) => void send(s, 'standard')}
+                  onSelect={(s) => void handleSend(s, depth)}
                 />
               </div>
             </div>
           </div>
         ) : (
           <div className="mx-auto max-w-[var(--chat-max-width)] px-4 py-6 space-y-6">
-            {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                role={m.role}
-                content={m.content}
-                createdAt={m.createdAt}
-              />
-            ))}
-
-            {agents.length > 0 && (
-              <div className="space-y-2">
-                {agents.map((a) => (
-                  <AgentStatusCard key={a.id} status={a} />
-                ))}
-              </div>
-            )}
-
-            {(status === 'streaming' || (status === 'agents' && streamText)) && streamText && (
-              <StreamingAssistant content={streamText} />
-            )}
-
-            {streamCitations.length > 0 && (
-              <div>
-                <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)] mb-2">
-                  Sources
-                </div>
-                <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 snap-x">
-                  {streamCitations.map((c, i) => (
-                    <div key={c.url + i} className="snap-start">
-                      <CitationCard citation={c} index={i} />
+            {messages.map((m, idx) => {
+              const isLastAssistant =
+                m.role === 'assistant' && idx === messages.length - 1;
+              const showShimmer = isLastAssistant && m.content.length === 0;
+              return (
+                <div key={m.id} className="space-y-3">
+                  {/* Agent cards appear directly above the current streaming assistant msg. */}
+                  {isLastAssistant && (showAgentCards || (allComplete && isStreaming)) && (
+                    <div className="space-y-2">
+                      {agentStatuses.map((s) => (
+                        <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
+                      ))}
                     </div>
+                  )}
+
+                  {showShimmer ? (
+                    <div className="w-full">
+                      <div className="h-4 w-2/3 rounded bg-[rgba(255,255,255,0.06)] animate-pulse" />
+                      <div className="h-4 w-1/2 rounded bg-[rgba(255,255,255,0.06)] animate-pulse mt-2" />
+                    </div>
+                  ) : (
+                    <MessageBubble role={m.role} content={m.content} createdAt={m.createdAt} />
+                  )}
+
+                  {m.role === 'assistant' && (m.sources?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)] mb-2">
+                        Sources
+                      </div>
+                      <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 snap-x">
+                        {m.sources!.map((s, i) => (
+                          <div key={s.url + i} className="snap-start">
+                            <CitationCard
+                              citation={{ url: s.url, title: s.title, domain: s.domain }}
+                              index={i}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {m.role === 'assistant' &&
+                    isLastAssistant &&
+                    !isStreaming &&
+                    (m.followUps?.length ?? 0) > 0 && (
+                      <div>
+                        <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)] mb-2">
+                          Follow up
+                        </div>
+                        <SuggestionChips
+                          suggestions={m.followUps!}
+                          onSelect={(s) => void handleSend(s, depth)}
+                          layout="inline"
+                        />
+                      </div>
+                    )}
+                </div>
+              );
+            })}
+
+            {/* If agents started but no assistant placeholder has been created yet, render them here. */}
+            {agentStatuses.length > 0 &&
+              !messages.some((m) => m.role === 'assistant') && (
+                <div className="space-y-2">
+                  {agentStatuses.map((s) => (
+                    <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {status === 'error' && (
-              <div className="text-sm text-cerna-loss">Something went wrong. Please try again.</div>
+            {error && (
+              <div
+                className="rounded-lg p-3 border flex items-start justify-between gap-3"
+                style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)' }}
+              >
+                <div className="text-[13px] text-cerna-loss">
+                  Something went wrong. {error}
+                </div>
+                {lastSentRef.current && (
+                  <button
+                    onClick={retry}
+                    className="text-[12px] text-cerna-primary hover:underline shrink-0"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
       </div>
 
       <div className="shrink-0 pt-2">
-        <ChatInput onSend={send} disabled={status === 'agents' || status === 'streaming'} />
+        <ChatInput
+          onSend={handleSend}
+          disabled={isStreaming || isLoading}
+          depth={depth}
+          onDepthChange={setDepth}
+          deepRemaining={deepRemaining}
+        />
       </div>
-    </div>
-  );
-}
-
-function StreamingAssistant({ content }: { content: string }) {
-  // Render with action-block styling live
-  const segments: Array<{ type: 'text' | 'action'; content: string }> = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  const r = new RegExp(ACTION_BLOCK_REGEX.source, 'g');
-  while ((match = r.exec(content)) !== null) {
-    if (match.index > lastIndex) segments.push({ type: 'text', content: content.slice(lastIndex, match.index) });
-    segments.push({ type: 'action', content: match[1] ?? '' });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < content.length) segments.push({ type: 'text', content: content.slice(lastIndex) });
-  if (segments.length === 0) segments.push({ type: 'text', content });
-
-  return (
-    <div className="w-full text-cerna-text-primary">
-      {segments.map((seg, i) =>
-        seg.type === 'action' ? (
-          <ActionBlock key={i} content={seg.content} />
-        ) : (
-          <div key={i} className="prose-cerna text-[15px]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{seg.content}</ReactMarkdown>
-          </div>
-        )
-      )}
     </div>
   );
 }

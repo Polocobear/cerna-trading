@@ -1,6 +1,32 @@
 'use client';
 
 import { cn } from '@/lib/utils/cn';
+import type { Position } from '@/types/portfolio';
+
+/**
+ * Build up to 4 context-aware starter prompts. Top holdings (ranked by shares*cost_basis)
+ * feed personalised suggestions; watchlist provides analysis starters; otherwise
+ * we fall back to general ASX research prompts.
+ */
+export function getDefaultSuggestions(
+  positions: Position[],
+  watchlist: { ticker: string }[] = []
+): string[] {
+  const open = positions.filter((p) => p.status === 'open');
+  const ranked = [...open].sort(
+    (a, b) => b.shares * b.cost_basis - a.shares * a.cost_basis
+  );
+  const top = ranked[0]?.ticker;
+  const watchTop = watchlist[0]?.ticker;
+
+  const out: string[] = [];
+  if (top) out.push(`Should I hold ${top}?`);
+  if (watchTop && watchTop !== top) out.push(`Analyze ${watchTop} fundamentals`);
+  out.push("What's moving on ASX today?");
+  if (open.length > 0) out.push("How's my portfolio looking?");
+  else out.push('Screen for dividend stocks');
+  return out.slice(0, 4);
+}
 
 interface SuggestionChipsProps {
   suggestions: string[];
