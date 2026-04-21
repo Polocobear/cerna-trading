@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { callGeminiV2, type GeminiV2Model } from '@/lib/gemini/client';
+import {
+  callGeminiV2,
+  sanitizeGeminiError,
+  type GeminiV2Model,
+} from '@/lib/gemini/client';
 import {
   buildAnalyzePrompt,
   buildBriefPrompt,
@@ -114,6 +118,32 @@ function inferCurrencyFromExchange(exchange: string): string {
     default:
       return 'USD';
   }
+}
+
+function isRetryableGeminiStatus(status?: number): status is number {
+  return status === 429 || status === 503 || (typeof status === 'number' && status >= 500);
+}
+
+function waitWithJitter(baseMs: number): Promise<void> {
+  const jitter = Math.random() * 500;
+  return new Promise((resolve) => setTimeout(resolve, baseMs + jitter));
+}
+
+function safeAgentError(err: unknown): string {
+  if (err instanceof Error) {
+    const geminiError = err as Error & { status?: number; rawText?: string };
+    if (typeof geminiError.status === 'number') {
+      return sanitizeGeminiError(
+        geminiError.status,
+        geminiError.rawText ?? geminiError.message
+      );
+    }
+    if (/Gemini/i.test(geminiError.message) || /^\s*\d{3}\b/.test(geminiError.message)) {
+      return 'The AI service encountered a temporary error. Please try again.';
+    }
+    return geminiError.message;
+  }
+  return 'unknown error';
 }
 
 function formatMoney(n: number, currency: string): string {
@@ -315,8 +345,8 @@ async function runResearchAgent(
     };
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
-    if (status === 429) {
-      await new Promise((r) => setTimeout(r, 2000));
+    if (isRetryableGeminiStatus(status)) {
+      await waitWithJitter(2000);
       try {
         const res = await tryCall(primary);
         return {
@@ -330,8 +360,9 @@ async function runResearchAgent(
         };
       } catch (err2) {
         const status2 = (err2 as Error & { status?: number }).status;
-        if (status2 === 429 && primary === 'gemini-2.5-pro') {
+        if (isRetryableGeminiStatus(status2) && primary === 'gemini-2.5-pro') {
           try {
+            await waitWithJitter(2000);
             usedModel = 'gemini-2.5-flash';
             const res = await tryCall('gemini-2.5-flash');
             return {
@@ -344,7 +375,7 @@ async function runResearchAgent(
               model: usedModel,
             };
           } catch (err3) {
-            const msg = err3 instanceof Error ? err3.message : 'unknown error';
+            const msg = safeAgentError(err3);
             return {
               agent,
               description,
@@ -357,7 +388,7 @@ async function runResearchAgent(
             };
           }
         }
-        const msg = err2 instanceof Error ? err2.message : 'unknown error';
+        const msg = safeAgentError(err2);
         return {
           agent,
           description,
@@ -370,7 +401,7 @@ async function runResearchAgent(
         };
       }
     }
-    const msg = err instanceof Error ? err.message : 'unknown error';
+    const msg = safeAgentError(err);
     return {
       agent,
       description,
@@ -444,7 +475,7 @@ export async function executeAgents(
     } else {
       const tool = toolCalls[i];
       const agent = classify(tool.name);
-      const msg = s.reason instanceof Error ? s.reason.message : 'unknown error';
+      const msg = safeAgentError(s.reason);
       results.push({
         agent,
         description: describeToolCall(tool.name, tool.arguments),

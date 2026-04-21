@@ -107,6 +107,22 @@ function genId(): string {
   return `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function sanitizeClientErrorMessage(message: string): string {
+  if (
+    /Gemini/i.test(message) ||
+    /request failed \(\d+\)/i.test(message) ||
+    /^\s*\d{3}\b/.test(message)
+  ) {
+    return 'The AI service is temporarily unavailable. Please try again.';
+  }
+  return message || 'Something went wrong. Please try again.';
+}
+
+function waitWithJitter(baseMs: number): Promise<void> {
+  const jitter = Math.random() * 200;
+  return new Promise((resolve) => setTimeout(resolve, baseMs + jitter));
+}
+
 export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
   const { sessionId, depth } = options;
 
@@ -360,12 +376,15 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
           return;
         }
         const msg = err instanceof Error ? err.message : 'Unknown error';
+        const safeError = sanitizeClientErrorMessage(msg);
         if (!isRetry && retryCountRef.current < 1) {
           retryCountRef.current += 1;
+          await waitWithJitter(300);
           await doSend(messageText, true);
           return;
         }
-        setError(msg);
+        console.error('[agent-chat] client send failed', err);
+        setError(safeError);
         setIsLoading(false);
         setIsStreaming(false);
       }

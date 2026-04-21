@@ -1,4 +1,9 @@
-import { callGeminiV2, type GeminiFunctionDeclaration } from '@/lib/gemini/client';
+import {
+  callGeminiV2,
+  sanitizeGeminiError,
+  type GeminiFunctionDeclaration,
+  type GeminiV2NonStreamResult,
+} from '@/lib/gemini/client';
 import { buildOrchestratorSystemPrompt, type ExchangeContext } from './prompts';
 import type { OrchestratorPlan, ToolCall, ToolName } from './types';
 
@@ -149,14 +154,30 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
     { role: 'user' as const, content: input.userMessage },
   ];
 
-  const result = await callGeminiV2({
-    model: 'gemini-2.5-flash',
-    systemPrompt: buildOrchestratorSystemPrompt(input.exchange),
-    messages,
-    tools: TOOL_DECLARATIONS,
-    temperature: 0.2,
-    maxOutputTokens: 1024,
-  });
+  let result: GeminiV2NonStreamResult;
+  try {
+    result = await callGeminiV2({
+      model: 'gemini-2.5-flash',
+      systemPrompt: buildOrchestratorSystemPrompt(input.exchange),
+      messages,
+      tools: TOOL_DECLARATIONS,
+      temperature: 0.2,
+      maxOutputTokens: 1024,
+    });
+  } catch (err) {
+    const geminiError = err as Error & { status?: number; rawText?: string };
+    if (typeof geminiError.status === 'number') {
+      const safeError = new Error(
+        sanitizeGeminiError(geminiError.status, geminiError.rawText ?? geminiError.message)
+      ) as Error & { status?: number; rawText?: string };
+      safeError.status = geminiError.status;
+      safeError.rawText = geminiError.rawText;
+      throw safeError;
+    }
+    throw err instanceof Error
+      ? err
+      : new Error('The AI service encountered a temporary error. Please try again.');
+  }
 
   const seen = new Set<string>();
   const toolCalls: ToolCall[] = [];

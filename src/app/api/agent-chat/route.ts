@@ -405,10 +405,19 @@ export async function POST(req: Request) {
         ]).catch(console.error);
 
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'unknown error';
+        const safeMsg =
+          "I couldn't process that request right now. Please try again in a moment.";
+        const error = err as Error & { status?: number; rawText?: string; model?: string };
+        console.error('[agent-chat] pipeline failed', {
+          message: err instanceof Error ? err.message : 'unknown error',
+          status: error.status,
+          model: error.model,
+          rawText: error.rawText,
+          stack: err instanceof Error ? err.stack : undefined,
+        });
         emit({
           type: 'stream',
-          content: `\n\nI couldn't process that. Try rephrasing. (${msg.slice(0, 120)})`,
+          content: `\n\n${safeMsg}`,
         });
         emit({
           type: 'done',
