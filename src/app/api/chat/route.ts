@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { callGemini } from '@/lib/gemini/client';
+import { callGemini, sanitizeGeminiError } from '@/lib/gemini/client';
 import { transformGeminiStream, type ParsedCitation } from '@/lib/gemini/stream';
 import { buildSystemPrompt, buildDefaultUserMessage } from '@/lib/gemini/prompts';
 import { routeToTier } from '@/lib/gemini/tier-router';
@@ -163,8 +163,20 @@ export async function POST(req: Request) {
 
   if (!geminiResponse.ok || !geminiResponse.body) {
     const errText = await geminiResponse.text().catch(() => 'Gemini error');
-    const status = geminiResponse.status === 429 ? 429 : 502;
-    return NextResponse.json({ error: errText }, { status });
+    console.error('[api/chat] Gemini request failed', {
+      status: geminiResponse.status,
+      body: errText,
+    });
+    const status =
+      geminiResponse.status === 429
+        ? 429
+        : geminiResponse.status === 503 || geminiResponse.status >= 500
+        ? 503
+        : 502;
+    return NextResponse.json(
+      { error: sanitizeGeminiError(geminiResponse.status, errText) },
+      { status }
+    );
   }
 
   const transformed = transformGeminiStream(geminiResponse.body);

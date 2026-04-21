@@ -5,7 +5,7 @@ const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 // DEEP:     Gemini 3.1 Pro — paid frontier reasoning for deep analysis
 const MODELS = {
   standard: 'gemini-2.5-pro',
-  deep: 'gemini-3.1-pro-preview',
+  deep: 'gemini-2.5-pro',
 } as const;
 
 export type ModelTier = keyof typeof MODELS;
@@ -58,11 +58,13 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
 
   const url = `${GEMINI_API_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  return callWithRetry(() =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  );
 }
 
 // =============================================================================
@@ -139,6 +141,53 @@ function domainOf(url: string): string {
   }
 }
 
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status === 503 || status >= 500;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function callWithRetry(
+  fn: () => Promise<Response>,
+  options?: {
+    maxRetries?: number;
+    backoffMs?: number;
+    downgradeModel?: string;
+  }
+): Promise<Response> {
+  const maxRetries = options?.maxRetries ?? 2;
+  const backoffMs = options?.backoffMs ?? 2000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const res = await fn();
+
+    if (res.ok) return res;
+
+    if (!isRetryableStatus(res.status) || attempt === maxRetries) {
+      return res;
+    }
+
+    const jitter = Math.random() * 500;
+    await wait(backoffMs * (attempt + 1) + jitter);
+  }
+
+  return fn();
+}
+
+export function sanitizeGeminiError(status: number, rawText: string): string {
+  const normalized = rawText.toLowerCase();
+
+  if (status === 503 || normalized.includes('high demand')) {
+    return 'The AI service is temporarily overloaded. Please try again in a moment.';
+  }
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.';
+  if (status === 400) return 'I had trouble understanding that request. Try rephrasing.';
+  if (status >= 500) return 'The AI service encountered a temporary error. Please try again.';
+  return 'Something unexpected happened. Please try again.';
+}
+
 function buildV2Body(opts: GeminiV2Options): Record<string, unknown> {
   const messages: GeminiV2Message[] =
     opts.messages ??
@@ -193,17 +242,29 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
   const url = `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildV2Body(opts)),
-  });
+  const body = JSON.stringify(buildV2Body(opts));
+  const res = await callWithRetry(() =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+  );
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    const err = new Error(`Gemini ${res.status}: ${text.slice(0, 400)}`) as Error & {
+    console.error('[Gemini] Non-OK response', {
+      model: opts.model,
+      status: res.status,
+      body: text,
+    });
+    const err = new Error(sanitizeGeminiError(res.status, text)) as Error & {
       status?: number;
+      rawText?: string;
+      model?: string;
     };
     err.status = res.status;
+    err.rawText = text;
+    err.model = opts.model;
     throw err;
   }
   const json = (await res.json()) as GeminiResponseJson;
@@ -231,20 +292,8 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
   return { text, functionCalls, sources, raw: json };
 }
 
-/**
- * Retry wrapper: retry once after 2s on HTTP 429/5xx.
- */
 export async function callGeminiV2WithRetry(
   opts: GeminiV2Options
 ): Promise<GeminiV2NonStreamResult> {
-  try {
-    return await callGeminiV2(opts);
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status;
-    if (status === 429 || (typeof status === 'number' && status >= 500)) {
-      await new Promise((r) => setTimeout(r, 2000));
-      return await callGeminiV2(opts);
-    }
-    throw err;
-  }
+  return callGeminiV2(opts);
 }

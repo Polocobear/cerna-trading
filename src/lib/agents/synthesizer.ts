@@ -1,4 +1,8 @@
-import { callGeminiV2Stream } from '@/lib/gemini/client';
+import {
+  callGeminiV2Stream,
+  callWithRetry,
+  sanitizeGeminiError,
+} from '@/lib/gemini/client';
 import { buildSynthesizerPrompt } from './prompts';
 import type { AgentResult } from './types';
 
@@ -45,17 +49,32 @@ export async function* synthesize(
 
   const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
 
-  const res = await callGeminiV2Stream({
-    model: 'gemini-2.5-flash',
-    systemPrompt,
-    userMessage,
-    temperature: 0.6,
-    maxOutputTokens: 4096,
-  });
+  const res = await callWithRetry(() =>
+    callGeminiV2Stream({
+      model: 'gemini-2.5-flash',
+      systemPrompt,
+      userMessage,
+      temperature: 0.6,
+      maxOutputTokens: 4096,
+    })
+  );
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Synthesizer failed: ${res.status} ${text.slice(0, 200)}`);
+    console.error('[synthesizer] Non-OK response', {
+      model: 'gemini-2.5-flash',
+      status: res.status,
+      body: text,
+    });
+    const err = new Error(sanitizeGeminiError(res.status, text)) as Error & {
+      status?: number;
+      rawText?: string;
+      model?: string;
+    };
+    err.status = res.status;
+    err.rawText = text;
+    err.model = 'gemini-2.5-flash';
+    throw err;
   }
 
   const reader = res.body.getReader();
@@ -86,6 +105,9 @@ export async function* synthesize(
         }
       }
     }
+  } catch (err) {
+    console.error('[synthesizer] Stream read failed', err);
+    throw new Error('The AI service encountered a temporary error. Please try again.');
   } finally {
     reader.releaseLock();
   }

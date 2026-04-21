@@ -60,11 +60,19 @@ function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
   };
 }
 
+function sanitizeAgentStatusNote(note?: string): string | undefined {
+  if (!note) return undefined;
+  if (/Gemini/i.test(note) || /^\s*\d{3}\b/.test(note) || /request failed \(\d+\)/i.test(note)) {
+    return 'Temporary error - retrying...';
+  }
+  return note;
+}
+
 function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
   const state: 'running' | 'complete' = s.status === 'complete' || s.status === 'error' ? 'complete' : 'running';
   const completionNote =
     s.status === 'error'
-      ? s.error
+      ? sanitizeAgentStatusNote(s.error)
       : s.status === 'complete'
       ? s.summary
       : undefined;
@@ -285,9 +293,7 @@ export function AgentChat({
                 className="rounded-lg p-3 border flex items-start justify-between gap-3"
                 style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)' }}
               >
-                <div className="text-[13px] text-cerna-loss">
-                  Something went wrong. {error}
-                </div>
+                <p className="text-[13px] text-cerna-loss">Something went wrong. Please try again.</p>
                 {lastSentRef.current && (
                   <button
                     onClick={retry}
