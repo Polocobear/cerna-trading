@@ -20,6 +20,8 @@ interface AgentChatProps {
   positions: Position[];
   watchlist?: { ticker: string }[];
   onSessionTitle?: (title: string) => void;
+  queuedPrompt?: string;
+  queuedPromptId?: number;
 }
 
 const AGENT_ICONS: Record<AgentName, typeof Search> = {
@@ -74,7 +76,15 @@ function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
   };
 }
 
-export function AgentChat({ sessionId, initialMessages = [], positions, watchlist = [], onSessionTitle }: AgentChatProps) {
+export function AgentChat({
+  sessionId,
+  initialMessages = [],
+  positions,
+  watchlist = [],
+  onSessionTitle,
+  queuedPrompt,
+  queuedPromptId,
+}: AgentChatProps) {
   const [depth, setDepth] = useState<'standard' | 'deep'>('standard');
   const {
     messages,
@@ -93,6 +103,7 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const lastSentRef = useRef<string>('');
+  const lastQueuedPromptIdRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     loadSession(initialMessages.map(chatMessageToAgent));
@@ -142,6 +153,20 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
     [handleSend, depth]
   );
 
+  useEffect(() => {
+    if (!queuedPrompt || queuedPromptId == null) return;
+    if (lastQueuedPromptIdRef.current === queuedPromptId) return;
+    lastQueuedPromptIdRef.current = queuedPromptId;
+
+    const timeoutId = window.setTimeout(() => {
+      void handleSend(queuedPrompt, depth);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [depth, handleSend, queuedPrompt, queuedPromptId]);
+
   const retry = useCallback(() => {
     if (lastSentRef.current) void sendMessage(lastSentRef.current);
   }, [sendMessage]);
@@ -156,7 +181,7 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
 
   return (
     <div className="flex flex-col h-full">
-      {/* Proactive alerts — above messages */}
+      {/* Proactive alerts above messages */}
       <AlertBanner
         alerts={alerts}
         onDismiss={dismissAlert}

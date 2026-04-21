@@ -6,15 +6,15 @@ import { LogOut, Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { MobileDrawer } from './MobileDrawer';
 import { AgentChat } from '@/features/chat/AgentChat';
-import { ScreenMode } from '@/features/modes/screen/ScreenMode';
-import { AnalyzeMode } from '@/features/modes/analyze/AnalyzeMode';
-import { BriefMode } from '@/features/modes/brief/BriefMode';
 import { PortfolioMode } from '@/features/modes/portfolio/PortfolioMode';
+import { Dashboard } from '@/features/dashboard/Dashboard';
 import { useSessionMessages } from '@/lib/sessions/use-session-messages';
 import { createClient } from '@/lib/supabase/client';
 import type { SessionSummary } from '@/features/layout/SidebarHistory';
 import type { Position, WatchlistItem, JournalEntry, Profile } from '@/types/portfolio';
-export type ViewId = 'chat' | 'screen' | 'analyze' | 'brief' | 'portfolio';
+
+export type ViewId = 'dashboard' | 'chat' | 'portfolio';
+type PortfolioIntent = 'connect-ib' | 'add-position' | null;
 
 interface AppShellProps {
   initialProfile: Profile | null;
@@ -27,12 +27,13 @@ interface AppShellProps {
 
 export function AppShell(props: AppShellProps) {
   const router = useRouter();
-  const [view, setView] = useState<ViewId>(props.initialView ?? 'chat');
-  const [analyzeTicker, setAnalyzeTicker] = useState('');
+  const [view, setView] = useState<ViewId>(props.initialView ?? 'dashboard');
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [positions, setPositions] = useState<Position[]>(props.initialPositions);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(props.initialWatchlist);
   const [journal] = useState<JournalEntry[]>(props.initialJournal);
+  const [portfolioIntent, setPortfolioIntent] = useState<PortfolioIntent>(null);
+  const [pendingChatPrompt, setPendingChatPrompt] = useState<{ id: number; text: string } | null>(null);
 
   const [sessionKey, setSessionKey] = useState(0);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(undefined);
@@ -47,8 +48,8 @@ export function AppShell(props: AppShellProps) {
   const { messages: historyMessages } = useSessionMessages(activeSessionId ?? null);
 
   const handleSelectSession = useCallback((s: SessionSummary) => {
-    const v: ViewId = s.mode === 'ask' ? 'chat' : (s.mode as ViewId);
-    setView(v);
+    void s;
+    setView('chat');
     setActiveSessionId(s.id);
     setSessionKey((k) => k + 1);
     setMobileDrawerOpen(false);
@@ -57,18 +58,34 @@ export function AppShell(props: AppShellProps) {
   const handleNewChat = useCallback(() => {
     setView('chat');
     setActiveSessionId(undefined);
+    setPendingChatPrompt(null);
     setSessionKey((k) => k + 1);
     setMobileDrawerOpen(false);
   }, []);
 
   const handleSelectView = useCallback((v: ViewId) => {
     setView(v);
+    if (v !== 'portfolio') {
+      setPortfolioIntent(null);
+    }
     setMobileDrawerOpen(false);
   }, []);
 
-  const selectTicker = useCallback((ticker: string) => {
-    setAnalyzeTicker(ticker);
-    setView('analyze');
+  const queueChatPrompt = useCallback((message: string) => {
+    setPendingChatPrompt({
+      id: Date.now(),
+      text: message,
+    });
+    setView('chat');
+    setActiveSessionId(undefined);
+    setSessionKey((k) => k + 1);
+    setMobileDrawerOpen(false);
+  }, []);
+
+  const openPortfolio = useCallback((intent?: 'connect-ib' | 'add-position') => {
+    setPortfolioIntent(intent ?? null);
+    setView('portfolio');
+    setMobileDrawerOpen(false);
   }, []);
 
   async function signOut() {
@@ -191,6 +208,16 @@ export function AppShell(props: AppShellProps) {
         </header>
 
         <main className="flex-1 overflow-hidden relative">
+          {view === 'dashboard' && (
+            <Dashboard
+              positions={positions}
+              watchlist={watchlist}
+              cashAvailable={props.initialProfile?.cash_available ?? 0}
+              onAskAI={queueChatPrompt}
+              onOpenPortfolio={openPortfolio}
+              onOpenChat={handleNewChat}
+            />
+          )}
           {view === 'chat' && (
             <AgentChat
               key={sessionId}
@@ -198,29 +225,9 @@ export function AppShell(props: AppShellProps) {
               initialMessages={historyMessages}
               positions={positions}
               watchlist={watchlist}
+              queuedPrompt={pendingChatPrompt?.text}
+              queuedPromptId={pendingChatPrompt?.id}
             />
-          )}
-          {view === 'screen' && (
-            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
-              <ScreenMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
-            </div>
-          )}
-          {view === 'analyze' && (
-            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
-              <AnalyzeMode
-                key={sessionId}
-                sessionId={sessionId}
-                initialTicker={analyzeTicker}
-                positions={positions}
-                watchlist={watchlist}
-                initialMessages={historyMessages}
-              />
-            </div>
-          )}
-          {view === 'brief' && (
-            <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
-              <BriefMode key={sessionId} sessionId={sessionId} initialMessages={historyMessages} />
-            </div>
           )}
           {view === 'portfolio' && (
             <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
@@ -228,12 +235,14 @@ export function AppShell(props: AppShellProps) {
                 positions={positions}
                 watchlist={watchlist}
                 journal={journal}
-                onAnalyze={selectTicker}
+                onAnalyze={(ticker) => queueChatPrompt(`Tell me about ${ticker} - what should I know right now?`)}
                 onAddPosition={addPosition}
                 onClosePosition={closePosition}
                 onDeletePosition={deletePosition}
                 onAddWatch={addWatch}
                 onRemoveWatch={removeWatch}
+                requestedAction={portfolioIntent}
+                onActionHandled={() => setPortfolioIntent(null)}
               />
             </div>
           )}
