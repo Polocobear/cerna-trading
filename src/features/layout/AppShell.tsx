@@ -22,6 +22,7 @@ interface AppShellProps {
   initialWatchlist: WatchlistItem[];
   initialJournal: JournalEntry[];
   userEmail: string;
+  userId: string;
   initialView?: ViewId;
 }
 
@@ -232,6 +233,7 @@ export function AppShell(props: AppShellProps) {
           {view === 'portfolio' && (
             <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
               <PortfolioMode
+                userId={props.userId}
                 positions={positions}
                 watchlist={watchlist}
                 journal={journal}

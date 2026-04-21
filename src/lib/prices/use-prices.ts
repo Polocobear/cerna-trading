@@ -18,7 +18,7 @@ interface UsePricesResult {
   marketState: string | null;
 }
 
-const POLL_INTERVAL = 5 * 60 * 1000;
+const POLL_INTERVAL = 2 * 60 * 1000;
 
 export function usePrices(tickers: string[]): UsePricesResult {
   const [prices, setPrices] = useState<Record<string, ClientPriceData>>({});

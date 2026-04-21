@@ -1,7 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Plus, Wallet, Eye, BookOpen, TrendingUp, TrendingDown } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  Plus,
+  Wallet,
+  Eye,
+  BookOpen,
+  TrendingUp,
+  TrendingDown,
+  Check,
+  RefreshCw,
+  Upload,
+  Plug,
+  Loader2,
+} from 'lucide-react';
 import { EmptyState } from '@/features/chat/EmptyState';
 import type { Position, WatchlistItem, JournalEntry } from '@/types/portfolio';
 import { PositionCard } from './PositionCard';
@@ -9,8 +21,11 @@ import { PositionForm } from './PositionForm';
 import { formatCurrency, formatDate, formatPercent } from '@/lib/utils/format';
 import { cn } from '@/lib/utils/cn';
 import { usePrices } from '@/lib/prices/use-prices';
+import { IBSetupWizard } from '@/features/portfolio/IBSetupWizard';
+import { CSVImport } from '@/features/portfolio/CSVImport';
 
 interface PortfolioModeProps {
+  userId: string;
   positions: Position[];
   watchlist: WatchlistItem[];
   journal: JournalEntry[];
@@ -41,12 +56,48 @@ const ACTION_COLORS: Record<string, string> = {
   pass: 'text-cerna-text-tertiary bg-[rgba(107,114,128,0.12)]',
 };
 
+interface SyncStatus {
+  connected: boolean;
+  last_activity_sync: string | null;
+  sync_status: 'pending' | 'syncing' | 'success' | 'error' | null;
+}
+
 export function PortfolioMode(props: PortfolioModeProps) {
   const [tab, setTab] = useState<Tab>('positions');
   const [showForm, setShowForm] = useState(false);
   const [watchTicker, setWatchTicker] = useState('');
   const [watchPrice, setWatchPrice] = useState('');
   const [watchNotes, setWatchNotes] = useState('');
+  const [showWizard, setShowWizard] = useState(false);
+  const [showCSV, setShowCSV] = useState(false);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const loadSyncStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/portfolio/sync/status');
+      if (!res.ok) return;
+      const data = (await res.json()) as SyncStatus;
+      setSync(data);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSyncStatus();
+  }, [loadSyncStatus]);
+
+  async function triggerSync() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      await fetch('/api/portfolio/sync', { method: 'POST' });
+      await loadSyncStatus();
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   const openTickers = props.positions.filter((p) => p.status === 'open').map((p) => p.ticker);
   const { prices, isLoading: pricesLoading } = usePrices(openTickers);
@@ -85,8 +136,55 @@ export function PortfolioMode(props: PortfolioModeProps) {
     setWatchNotes('');
   }
 
+  const lastSyncLabel = sync?.last_activity_sync
+    ? new Date(sync.last_activity_sync).toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : null;
+
   return (
     <div className="max-w-5xl mx-auto">
+      <div className="mb-5 glass rounded-xl p-4 flex flex-wrap items-center gap-3">
+        {sync?.connected ? (
+          <>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[rgba(34,197,94,0.12)] text-cerna-profit text-xs font-medium">
+              <Check size={12} /> IB Connected
+            </span>
+            {lastSyncLabel && (
+              <span className="text-xs text-cerna-text-tertiary">Last sync {lastSyncLabel}</span>
+            )}
+            <button
+              onClick={triggerSync}
+              disabled={syncing}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-cerna-border text-cerna-text-primary text-sm hover:border-cerna-primary transition disabled:opacity-50"
+            >
+              {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              Sync now
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => setShowWizard(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-cerna-primary hover:bg-cerna-primary-hover text-white text-sm font-medium transition"
+            >
+              <Plug size={14} />
+              Connect Interactive Brokers
+            </button>
+          </>
+        )}
+        <button
+          onClick={() => setShowCSV(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-cerna-border text-cerna-text-primary text-sm hover:border-cerna-primary transition"
+        >
+          <Upload size={14} />
+          Import CSV
+        </button>
+      </div>
+
       <div className="flex items-center gap-1 mb-5 glass rounded-full p-1 w-fit">
         {(['positions', 'watchlist', 'journal'] as const).map((t) => (
           <button
@@ -296,6 +394,26 @@ export function PortfolioMode(props: PortfolioModeProps) {
             </div>
           ))}
         </div>
+      )}
+
+      {showWizard && (
+        <IBSetupWizard
+          onClose={() => setShowWizard(false)}
+          onComplete={() => {
+            setShowWizard(false);
+            void loadSyncStatus();
+          }}
+        />
+      )}
+      {showCSV && (
+        <CSVImport
+          userId={props.userId}
+          onClose={() => setShowCSV(false)}
+          onImported={() => {
+            setShowCSV(false);
+            void loadSyncStatus();
+          }}
+        />
       )}
     </div>
   );

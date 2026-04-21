@@ -6,7 +6,7 @@ const FOCUS_INSTRUCTION: Record<string, string> = {
   everything: 'Cover company news, earnings, macro context, and recent analyst actions.',
   earnings: 'Focus exclusively on upcoming/recent earnings reports and analyst estimate revisions.',
   news: 'Focus exclusively on company-specific news and press releases — skip macro and analyst actions.',
-  macro: 'Focus on macro factors: RBA, ASX200 index, AUD/USD, commodities, sector rotation, global markets. Tie each point back to portfolio impact.',
+  macro: 'Focus on macro factors: central bank moves, major index action, FX, commodities, sector rotation, global markets. Tie each point back to portfolio impact.',
   analyst: 'Focus on recent upgrades, downgrades, target changes, and new coverage initiations.',
   dividends: 'Focus on upcoming ex-dividend dates, yield changes, and payout announcements.',
 };
@@ -36,11 +36,11 @@ Deliver a morning intelligence brief focused on the user's ${subjects}.
 
 Focus: ${focusLine}
 
-Search overnight and recent news (US close, ASX pre-open). Skip tickers with no meaningful news.
+Search overnight and recent news. Skip tickers with no meaningful news.
 
 Structure the brief with these sections (markdown headings):
 ## Market Context
-ASX overall direction, AUD/USD, commodities if relevant.
+Overall market direction, FX, commodities if relevant.
 
 ## Holdings Update
 Per-ticker news with impact assessment.

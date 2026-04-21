@@ -9,7 +9,7 @@ interface ProgressTrackerProps {
 }
 
 const STEPS = [
-  'Searching ASX financials',
+  'Searching financials',
   'Analyzing fundamentals',
   'Comparing to portfolio',
   'Generating recommendations',

@@ -27,7 +27,7 @@ function detectTouch(): boolean {
 export function ChatInput({
   onSend,
   disabled,
-  placeholder = 'Ask anything about ASX...',
+  placeholder = 'Ask anything about your portfolio...',
   depth: controlledDepth,
   onDepthChange,
   deepRemaining = null,

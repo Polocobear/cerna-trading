@@ -4,11 +4,11 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Cerna Trading — Intelligent Portfolio Analysis',
   description:
-    'AI-powered trading intelligence for ASX investors. Portfolio-aware analysis, value screening, and morning briefs powered by real-time data.',
-  keywords: ['ASX', 'trading', 'portfolio', 'SMSF', 'stock analysis', 'value investing'],
+    'AI-powered trading intelligence for self-directed investors. Portfolio-aware analysis, value screening, and morning briefs powered by real-time data.',
+  keywords: ['trading', 'portfolio', 'SMSF', 'stock analysis', 'value investing'],
   openGraph: {
     title: 'Cerna Trading',
-    description: 'AI-powered trading intelligence for ASX investors',
+    description: 'AI-powered trading intelligence for self-directed investors',
     type: 'website',
   },
   robots: {

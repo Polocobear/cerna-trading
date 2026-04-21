@@ -1,19 +1,20 @@
 import { callGeminiV2, type GeminiFunctionDeclaration } from '@/lib/gemini/client';
-import { ORCHESTRATOR_SYSTEM_PROMPT } from './prompts';
+import { buildOrchestratorSystemPrompt, type ExchangeContext } from './prompts';
 import type { OrchestratorPlan, ToolCall, ToolName } from './types';
 
 const VALID_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
-  'screen_asx',
+  'screen_stocks',
   'analyze_stock',
   'brief_market',
   'check_portfolio',
+  'log_trade',
 ]);
 
 const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
-    name: 'screen_asx',
+    name: 'screen_stocks',
     description:
-      'Screen the ASX for stocks matching a strategy. Use for discovery queries ("find value stocks", "dividend plays in mining").',
+      "Screen for stocks matching criteria on the user's preferred exchange(s). Use when the user wants to find new investment opportunities.",
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -42,11 +43,11 @@ const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: 'analyze_stock',
     description:
-      'Deep institutional analysis of a single ASX ticker. Use for "analyze X", "should I buy X", "thoughts on X".',
+      'Deep institutional analysis of a single ticker. Use for "analyze X", "should I buy X", "thoughts on X".',
     parameters: {
       type: 'OBJECT',
       properties: {
-        ticker: { type: 'STRING', description: 'ASX ticker, uppercase, no .AX suffix' },
+        ticker: { type: 'STRING', description: 'Ticker symbol, uppercase, no exchange suffix' },
         analysis_type: {
           type: 'STRING',
           enum: ['thesis', 'fundamentals', 'technical', 'peers', 'valuation', 'full'],
@@ -96,11 +97,50 @@ const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
       required: ['check_type'],
     },
   },
+  {
+    name: 'log_trade',
+    description:
+      'Log a trade the user has made or is reporting. Use when the user says they bought, sold, added to, or trimmed a position. Parse the trade details from their message.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        ticker: {
+          type: 'STRING',
+          description: "Stock ticker symbol, e.g. 'BHP', 'AAPL', 'CBA'",
+        },
+        action: {
+          type: 'STRING',
+          enum: ['buy', 'sell', 'add', 'trim'],
+          description:
+            "The trade action: 'buy' opens a new position, 'add' increases an existing one, 'sell' closes, 'trim' reduces.",
+        },
+        shares: {
+          type: 'NUMBER',
+          description: 'Number of shares traded',
+        },
+        price: {
+          type: 'NUMBER',
+          description: 'Per-share price paid or received',
+        },
+        exchange: {
+          type: 'STRING',
+          description:
+            'Exchange if mentioned (ASX, NYSE, NASDAQ, etc). Infer from ticker if not stated.',
+        },
+        currency: {
+          type: 'STRING',
+          description: 'Currency if mentioned. Infer from exchange if not stated.',
+        },
+      },
+      required: ['ticker', 'action', 'shares', 'price'],
+    },
+  },
 ];
 
 export interface OrchestratorInput {
   userMessage: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  exchange: ExchangeContext;
 }
 
 export async function runOrchestrator(input: OrchestratorInput): Promise<OrchestratorPlan> {
@@ -111,7 +151,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
 
   const result = await callGeminiV2({
     model: 'gemini-2.5-flash',
-    systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+    systemPrompt: buildOrchestratorSystemPrompt(input.exchange),
     messages,
     tools: TOOL_DECLARATIONS,
     temperature: 0.2,
@@ -122,10 +162,8 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
   const toolCalls: ToolCall[] = [];
   for (const fc of result.functionCalls) {
     if (!VALID_TOOLS.has(fc.name as ToolName)) continue;
-    // dedupe exact duplicates (same name + same stringified args)
     const key = `${fc.name}:${JSON.stringify(fc.args ?? {})}`;
     if (seen.has(key)) continue;
-    // also dedupe by name (rule: never duplicate call)
     const nameSeen = toolCalls.some((t) => t.name === fc.name);
     if (nameSeen) continue;
     seen.add(key);
@@ -135,7 +173,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
 
   if (toolCalls.length === 0) {
     const trimmed = result.text.trim();
-    return { directResponse: trimmed || "How can I help with your portfolio today?", toolCalls: [] };
+    return { directResponse: trimmed || 'How can I help with your portfolio today?', toolCalls: [] };
   }
 
   return { toolCalls };

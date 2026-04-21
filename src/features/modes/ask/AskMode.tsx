@@ -6,7 +6,7 @@ import { ChatStream } from '@/features/chat/ChatStream';
 
 const SUGGESTIONS = [
   'Explain SMSF contribution rules',
-  "What's a good P/E ratio for ASX banks?",
+  "What's a good P/E ratio for bank stocks?",
   'How do I read a balance sheet?',
 ];
 

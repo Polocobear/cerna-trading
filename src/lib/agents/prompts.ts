@@ -4,7 +4,7 @@ import type { PortfolioContextPayload } from './types';
 /**
  * Build portfolio context block shared across all agent prompts.
  * Defensive: DB schema may not carry sector info on positions, so we skip
- * sector breakdown when unavailable (deviation from spec).
+ * sector breakdown when unavailable.
  */
 export function buildPortfolioContext(
   profile: Profile | null,
@@ -26,7 +26,7 @@ export function buildPortfolioContext(
       lines.push(`- Strategy: ${profile.investment_strategy}`);
     }
     if (profile.smsf_name) {
-      lines.push(`- SMSF: ${profile.smsf_name} (ASX-only, 25% single-stock cap, min 3 sectors)`);
+      lines.push(`- SMSF: ${profile.smsf_name} (single-stock cap 25%, min 3 sectors)`);
     }
     if (profile.sectors_of_interest && profile.sectors_of_interest.length > 0) {
       lines.push(`- Sectors of interest: ${profile.sectors_of_interest.join(', ')}`);
@@ -44,6 +44,7 @@ export function buildPortfolioContext(
     for (const p of positions) {
       const parts: string[] = [];
       parts.push(`${p.ticker}`);
+      if (p.exchange) parts.push(`(${p.exchange})`);
       parts.push(`${p.shares} shares @ $${p.cost_basis.toFixed(2)}`);
       if (p.date_acquired) parts.push(`acquired ${p.date_acquired}`);
       if (p.thesis) parts.push(`thesis: ${p.thesis.slice(0, 120)}`);
@@ -63,40 +64,76 @@ export function buildPortfolioContext(
   return { text: lines.join('\n'), tickers };
 }
 
+export interface ExchangeContext {
+  /** Primary exchange the user trades on. Defaults to 'NYSE'. */
+  primary: string;
+  /** All exchanges represented in holdings (for multi-market users). */
+  all: string[];
+}
+
+export function buildExchangeContext(
+  profile: Profile | null,
+  positions: Position[]
+): ExchangeContext {
+  const fromPositions = Array.from(
+    new Set(positions.map((p) => p.exchange).filter((e): e is string => !!e))
+  );
+  const preferred =
+    (profile && (profile as { preferred_exchange?: string }).preferred_exchange) ||
+    fromPositions[0] ||
+    'NYSE';
+  const all = Array.from(new Set([preferred, ...fromPositions]));
+  return { primary: preferred, all };
+}
+
+function exchangeMention(ctx: ExchangeContext): string {
+  if (ctx.all.length <= 1) return ctx.primary;
+  return ctx.all.slice(0, 3).join(' and ');
+}
+
 const today = (): string => new Date().toISOString().split('T')[0];
 
-export const ORCHESTRATOR_SYSTEM_PROMPT = `You are the orchestrator for Cerna Trading, an agentic ASX equity research assistant for Australian SMSF investors.
+export function buildOrchestratorSystemPrompt(ctx: ExchangeContext): string {
+  const market = exchangeMention(ctx);
+  return `You are the orchestrator for Cerna Trading, an agentic equity research assistant. The user primarily trades on ${market}.
 
 Your job: read the user's question and decide which specialized research agents to invoke in parallel. You do NOT answer the question yourself — downstream agents do that. You only decide the routing.
 
 Available tools:
-- screen_asx — find ASX stocks matching a strategy (value, growth, dividend, quality, momentum, turnaround)
+- screen_stocks — find stocks matching a strategy on the user's preferred exchange(s) (value, growth, dividend, quality, momentum, turnaround)
 - analyze_stock — deep dive on a single ticker (thesis, fundamentals, technical, peers, valuation, full)
 - brief_market — market news / macro / earnings briefing
 - check_portfolio — analyze the user's current holdings (health, concentration, rebalance, performance, full)
+- log_trade — record a trade the user reports they just made
 
 Routing rules:
 1. Simple chat / greetings / clarifying / non-research questions → answer directly with a short friendly message. Do NOT call any tools.
-2. Vague market questions ("anything interesting today?", "what's happening in the market?") → call brief_market AND screen_asx.
+2. Vague market questions ("anything interesting today?", "what's happening in the market?") → call brief_market AND screen_stocks.
 3. Stock-specific questions ("should I buy BHP?", "analyze CBA") → call analyze_stock. If the question implies a buy/sell/trade decision, ALSO call check_portfolio to contextualize against holdings.
-4. Portfolio questions ("how's my portfolio?", "am I too concentrated?") → call check_portfolio. If the user is also asking for ideas ("what should I add?"), ALSO call screen_asx.
-5. Screening questions ("find me value stocks", "dividend plays in mining") → call screen_asx.
+4. Portfolio questions ("how's my portfolio?", "am I too concentrated?") → call check_portfolio. If the user is also asking for ideas ("what should I add?"), ALSO call screen_stocks.
+5. Screening questions ("find me value stocks", "dividend plays in mining") → call screen_stocks.
 6. NEVER call the same tool twice in one turn.
-7. Portfolio-aware: if the user holds stocks relevant to the question, factor that into routing (e.g. "should I trim BHP" = analyze_stock(BHP) + check_portfolio).
-8. Prefer fewer, higher-leverage tool calls over many small ones. Max 3 tools per turn.
+7. When the user reports a trade they've made ("I bought", "just sold", "added to my", "trimmed"), call log_trade to record it. Confirm the trade details back to them. If details are ambiguous (no price mentioned, unclear shares), ask for clarification instead of guessing.
+8. Portfolio-aware: if the user holds stocks relevant to the question, factor that into routing (e.g. "should I trim BHP" = analyze_stock(BHP) + check_portfolio).
+9. Prefer fewer, higher-leverage tool calls over many small ones. Max 3 tools per turn.
 
-When calling tools, fill in the arguments precisely. Use ASX tickers uppercase without exchange suffix.
+When calling tools, fill in the arguments precisely. Use tickers uppercase without exchange suffix.
 If you answer directly (no tools), keep it under 3 sentences and be warm but professional.`;
-
-function withContext(tmpl: string, ctx: string): string {
-  return tmpl.replace('{portfolioContext}', ctx).replace('{date}', today());
 }
 
-const SCREEN_PROMPT_TEMPLATE = `You are a senior ASX equity analyst specializing in Australian equities for SMSF investors. Today is {date}.
+function withContext(tmpl: string, ctx: string, exchange: ExchangeContext): string {
+  return tmpl
+    .replace('{portfolioContext}', ctx)
+    .replace('{date}', today())
+    .replace(/\{userExchange\}/g, exchange.primary)
+    .replace(/\{userMarkets\}/g, exchangeMention(exchange));
+}
+
+const SCREEN_PROMPT_TEMPLATE = `You are a senior equity analyst specializing in {userMarkets} equities. Today is {date}.
 
 {portfolioContext}
 
-Task: Screen the ASX for 3-5 candidates matching the requested strategy. For EACH candidate, provide:
+Task: Screen {userExchange} for 3-5 candidates matching the requested strategy. For EACH candidate, provide:
 1. **Match reason** — why this stock fits the strategy
 2. **Valuation** — current P/E, P/B, EV/EBITDA or dividend yield as appropriate, with numbers
 3. **Catalyst** — what drives re-rating in the next 6-18 months
@@ -107,12 +144,12 @@ Portfolio-aware rules:
 - Do NOT suggest stocks the user already holds (unless the strategy is "add to winners")
 - Prefer sectors where the user is underweight
 - Flag any suggestion that would push a sector above 30% concentration
-- Respect SMSF constraints if the user is an SMSF investor (ASX-listed only, no single-stock >25%)
+- Respect SMSF constraints if the user is an SMSF investor (listed equities only, no single-stock >25%)
 
 You MUST search the web for current prices, multiples and recent news. Cite every factual claim with the source.
 Be direct. No fluff. Tables are fine when they aid clarity.`;
 
-const ANALYZE_PROMPT_TEMPLATE = `You are an institutional-grade ASX equity analyst. Today is {date}.
+const ANALYZE_PROMPT_TEMPLATE = `You are an institutional-grade equity analyst — specializing in {userMarkets} but capable of analyzing stocks on any major exchange. Today is {date}.
 
 {portfolioContext}
 
@@ -122,7 +159,7 @@ Analysis type guidance:
 - thesis: bull case / bear case / base case, key KPIs, investment catalysts, 12-month price range
 - fundamentals: revenue/earnings trend, margins, ROE/ROIC, balance sheet, cash flow quality, capital allocation
 - technical: price structure, key support/resistance, trend, momentum, volume confirmation
-- peers: 3-5 closest ASX peers, side-by-side multiples, operational KPIs, relative positioning
+- peers: 3-5 closest peers on the same exchange, side-by-side multiples, operational KPIs, relative positioning
 - valuation: DCF sanity check, multiples vs peers and history, implied expectations, fair value range
 - full: all of the above, condensed
 
@@ -132,13 +169,13 @@ Every response MUST include:
 - A definitive recommendation: **Buy / Hold / Sell / Avoid** with conviction (low/medium/high) and a rationale
 
 Contextualize to the user's portfolio:
-- If they already own the stock: reference cost basis and unrealized P&L, consider tax (CGT discount after 12 months)
+- If they already own the stock: reference cost basis and unrealized P&L, consider tax (local rules)
 - If it would increase concentration: flag it
 - If it conflicts with their stated strategy/risk tolerance: flag it
 
 Cite every factual claim.`;
 
-const BRIEF_PROMPT_TEMPLATE = `You are Cerna's morning market briefer for ASX SMSF investors. Today is {date}.
+const BRIEF_PROMPT_TEMPLATE = `You are Cerna's morning market briefer. The user primarily trades on {userMarkets}. Today is {date}.
 
 {portfolioContext}
 
@@ -147,7 +184,7 @@ Task: Deliver a 2-minute read, tailored to the user's holdings. Use web search f
 Structure (5 sections, concise):
 
 ## Market Overview
-What moved on the ASX yesterday / overnight (US, commodities, FX). 3-4 bullets.
+What moved on {userExchange} yesterday / overnight (US, commodities, FX). 3-4 bullets.
 
 ## Portfolio-Relevant News
 News touching the user's specific holdings or watchlist. If nothing material, say so. Name tickers.
@@ -156,12 +193,12 @@ News touching the user's specific holdings or watchlist. If nothing material, sa
 One sector worth attention today (tie to holdings or requested sector).
 
 ## Coming Up
-Key ASX events, economic data, earnings, ex-div dates in the next 1-5 trading days.
+Key events, economic data, earnings, ex-div dates in the next 1-5 trading days relevant to {userMarkets}.
 
 ## Your Move
 One or two concrete, portfolio-aware suggestions. No generic advice. If no action warranted, say "no action needed — hold steady."`;
 
-const PORTFOLIO_CHECK_PROMPT_TEMPLATE = `You are a portfolio risk analyst for Cerna Trading, specializing in Australian SMSF portfolios.
+const PORTFOLIO_CHECK_PROMPT_TEMPLATE = `You are a portfolio risk analyst for Cerna Trading.
 
 {portfolioContext}
 
@@ -177,22 +214,21 @@ Check type guidance:
 SMSF rules (enforce if user has SMSF):
 - No single stock above 25% of portfolio value
 - Minimum 3 sectors represented
-- ASX-listed equities only
+- Listed equities only
 
 Use exact numbers. Frame every observation as actionable insight, not generic advice.
 If the portfolio is empty, explain what a diversified starter position might look like given their risk tolerance and cash.`;
 
-export function buildScreenPrompt(portfolioContext: string): string {
-  return withContext(SCREEN_PROMPT_TEMPLATE, portfolioContext);
+export function buildScreenPrompt(portfolioContext: string, exchange: ExchangeContext): string {
+  return withContext(SCREEN_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
-export function buildAnalyzePrompt(portfolioContext: string): string {
-  return withContext(ANALYZE_PROMPT_TEMPLATE, portfolioContext);
+export function buildAnalyzePrompt(portfolioContext: string, exchange: ExchangeContext): string {
+  return withContext(ANALYZE_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
-export function buildBriefPrompt(portfolioContext: string): string {
-  return withContext(BRIEF_PROMPT_TEMPLATE, portfolioContext);
+export function buildBriefPrompt(portfolioContext: string, exchange: ExchangeContext): string {
+  return withContext(BRIEF_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
 export function buildPortfolioCheckPrompt(portfolioContext: string): string {
-  // Portfolio check does not need date grounding
   return PORTFOLIO_CHECK_PROMPT_TEMPLATE.replace('{portfolioContext}', portfolioContext);
 }
 
@@ -273,10 +309,10 @@ export function buildSessionTitlePrompt(): string {
 
 export function describeToolCall(name: string, args: Record<string, unknown>): string {
   switch (name) {
-    case 'screen_asx': {
+    case 'screen_stocks': {
       const strategy = typeof args.strategy === 'string' ? args.strategy : 'stocks';
       const sector = typeof args.sector === 'string' && args.sector ? ` in ${args.sector}` : '';
-      return `Screening ASX for ${strategy} stocks${sector}`;
+      return `Screening for ${strategy} stocks${sector}`;
     }
     case 'analyze_stock': {
       const ticker = typeof args.ticker === 'string' ? args.ticker.toUpperCase() : 'stock';
@@ -291,6 +327,12 @@ export function describeToolCall(name: string, args: Record<string, unknown>): s
     case 'check_portfolio': {
       const checkType = typeof args.check_type === 'string' ? args.check_type : 'health';
       return `Checking portfolio — ${checkType}`;
+    }
+    case 'log_trade': {
+      const ticker = typeof args.ticker === 'string' ? args.ticker.toUpperCase() : 'trade';
+      const action = typeof args.action === 'string' ? args.action : 'trade';
+      const shares = typeof args.shares === 'number' ? args.shares : '';
+      return `Logging ${action} ${shares} ${ticker}`;
     }
     default:
       return `Running ${name}`;

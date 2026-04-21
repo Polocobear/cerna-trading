@@ -51,7 +51,7 @@ export function StepProfile({ displayName, smsfName, strategy, onChange, onNext 
           required
           rows={3}
           value={strategy}
-          placeholder="e.g., Long-term value investing focused on ASX blue chips and dividend stocks"
+          placeholder="e.g., Long-term value investing focused on blue chips and dividend stocks"
           onChange={(e) => onChange({ displayName, smsfName, strategy: e.target.value })}
           className="w-full px-3 py-2.5 rounded-lg bg-cerna-bg-primary border border-cerna-border text-cerna-text-primary focus:border-cerna-border-active focus:outline-none focus:ring-1 focus:ring-[rgba(124,91,240,0.25)] transition-smooth"
         />

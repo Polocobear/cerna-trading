@@ -7,7 +7,11 @@ import {
   getDeepUsageRemaining,
 } from '@/lib/gemini/deep-usage';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
-import { buildPortfolioContext, describeToolCall } from '@/lib/agents/prompts';
+import {
+  buildPortfolioContext,
+  buildExchangeContext,
+  describeToolCall,
+} from '@/lib/agents/prompts';
 import { runOrchestrator } from '@/lib/agents/orchestrator';
 import { executeAgents } from '@/lib/agents/executor';
 import { synthesize, dedupeSources } from '@/lib/agents/synthesizer';
@@ -46,12 +50,14 @@ type SSEPayload =
 
 function classify(toolName: string): AgentName {
   switch (toolName) {
-    case 'screen_asx':
+    case 'screen_stocks':
       return 'screen';
     case 'analyze_stock':
       return 'analyze';
     case 'brief_market':
       return 'brief';
+    case 'log_trade':
+      return 'trade_log';
     case 'check_portfolio':
     default:
       return 'portfolio';
@@ -190,6 +196,7 @@ export async function POST(req: Request) {
   const isFirstExchange = (priorMsgsRes.data ?? []).length === 0;
 
   const portfolioCtx = buildPortfolioContext(profile, positions, watchlist);
+  const exchangeCtx = buildExchangeContext(profile, positions);
 
   // Build intelligence context (memory + decisions + sessions) — non-blocking best-effort
   const intelCtx = await buildIntelligenceContext(user.id, sessionId, supabase).catch(() => ({
@@ -238,6 +245,7 @@ export async function POST(req: Request) {
         const plan = await runOrchestrator({
           userMessage: message,
           history: history.slice(-10),
+          exchange: exchangeCtx,
         });
 
         // direct response path
@@ -294,8 +302,14 @@ export async function POST(req: Request) {
         // (d) execute
         const results: AgentResult[] = await executeAgents(
           plan.toolCalls,
-          portfolioCtx.text,
-          useDeep,
+          {
+            portfolioContext: portfolioCtx.text,
+            exchange: exchangeCtx,
+            isDeepAvailable: useDeep,
+            supabase,
+            userId: user.id,
+            userMessage: message,
+          },
           (evt) => emit(evt)
         );
 

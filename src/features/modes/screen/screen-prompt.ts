@@ -59,7 +59,7 @@ Positions: ${portfolioJson}
 ${filterBlock}
 
 ADDITIONAL REQUIREMENTS:
-- Must be listed on ASX (SMSF compliance — no unlisted assets)
+- Must be listed on a major exchange (SMSF compliance — no unlisted assets)
 - Market cap above $100M (liquidity for SMSF)
 - Do NOT recommend stocks the user already holds
 

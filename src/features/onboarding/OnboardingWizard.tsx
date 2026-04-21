@@ -7,6 +7,8 @@ import type { RiskTolerance } from '@/types/portfolio';
 import { createClient } from '@/lib/supabase/client';
 import { StepProfile } from './StepProfile';
 import { StepRisk } from './StepRisk';
+import { StepExchange } from './StepExchange';
+import { StepConnectBroker } from './StepConnectBroker';
 import { StepPositions, type DraftPosition } from './StepPositions';
 import { StepReady } from './StepReady';
 
@@ -26,13 +28,18 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
   const [strategy, setStrategy] = useState('');
   const [risk, setRisk] = useState<RiskTolerance>('moderate');
   const [sectors, setSectors] = useState<string[]>([]);
+  const [exchanges, setExchanges] = useState<string[]>([]);
+  const [ibConnected, setIbConnected] = useState(false);
   const [positions, setPositions] = useState<DraftPosition[]>([]);
+
+  const totalSteps = 6;
 
   async function complete(destination: 'screen' | 'brief' | 'dashboard') {
     setSubmitting(true);
     setError(null);
     try {
       const supabase = createClient();
+      const primaryExchange = exchanges[0] ?? 'ASX';
       const { error: profileErr } = await supabase
         .from('profiles')
         .update({
@@ -41,13 +48,14 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
           investment_strategy: strategy,
           risk_tolerance: risk,
           sectors_of_interest: sectors.length > 0 ? sectors : null,
+          preferred_exchange: exchanges.length > 0 ? exchanges.join(',') : primaryExchange,
           updated_at: new Date().toISOString(),
         })
         .eq('id', userId);
 
       if (profileErr) throw profileErr;
 
-      if (positions.length > 0) {
+      if (!ibConnected && positions.length > 0) {
         const rows = positions.map((p) => ({
           user_id: userId,
           ticker: p.ticker,
@@ -55,6 +63,7 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
           cost_basis: p.cost_basis,
           date_acquired: p.date_acquired ?? null,
           thesis: p.thesis ?? null,
+          exchange: primaryExchange,
         }));
         const { error: posErr } = await supabase.from('positions').insert(rows);
         if (posErr) throw posErr;
@@ -70,7 +79,7 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
     }
   }
 
-  const progressPct = (step / 4) * 100;
+  const progressPct = (step / totalSteps) * 100;
 
   return (
     <div className="relative min-h-screen flex items-center justify-center p-6 overflow-hidden">
@@ -84,7 +93,7 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
 
       <div className="relative w-full max-w-[560px]">
         <div className="mb-4 flex items-center gap-3">
-          {step > 1 && step < 4 && (
+          {step > 1 && step < totalSteps && (
             <button
               onClick={() => setStep((s) => s - 1)}
               className="p-2 -ml-2 text-cerna-text-tertiary hover:text-cerna-text-primary transition-smooth"
@@ -99,7 +108,9 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
               style={{ width: `${progressPct}%` }}
             />
           </div>
-          <span className="text-xs text-cerna-text-tertiary tabular-nums">{step}/4</span>
+          <span className="text-xs text-cerna-text-tertiary tabular-nums">
+            {step}/{totalSteps}
+          </span>
         </div>
 
         <div className="rounded-2xl glass-elevated p-6 md:p-8">
@@ -128,21 +139,36 @@ export function OnboardingWizard({ userId, initialDisplayName = '' }: Onboarding
             />
           )}
           {step === 3 && (
-            <StepPositions
-              positions={positions}
-              onChange={setPositions}
+            <StepExchange
+              selected={exchanges}
+              onChange={setExchanges}
               onNext={() => setStep(4)}
-              onSkip={() => {
-                setPositions([]);
-                setStep(4);
-              }}
             />
           )}
           {step === 4 && (
+            <StepConnectBroker
+              onDone={(connected) => {
+                setIbConnected(connected);
+                setStep(connected ? 6 : 5);
+              }}
+            />
+          )}
+          {step === 5 && (
+            <StepPositions
+              positions={positions}
+              onChange={setPositions}
+              onNext={() => setStep(6)}
+              onSkip={() => {
+                setPositions([]);
+                setStep(6);
+              }}
+            />
+          )}
+          {step === 6 && (
             <StepReady
               displayName={displayName}
               risk={risk}
-              positionCount={positions.length}
+              positionCount={ibConnected ? -1 : positions.length}
               onComplete={complete}
               submitting={submitting}
             />
