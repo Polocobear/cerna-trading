@@ -17,7 +17,7 @@ export function buildThesisPrompt(ticker: string, portfolio: Position[]): string
   const position = portfolio.find((p) => p.ticker.toUpperCase() === ticker.toUpperCase());
   return `You are Cerna Trading, a value investing analyst for Australian retail investors.
 
-The user is performing a THESIS CHECK on ${ticker} (ASX).
+The user is performing a THESIS CHECK on ${ticker} .
 
 ${positionBlock(position, ticker)}
 
@@ -38,14 +38,13 @@ export function buildFundamentalsPrompt(ticker: string, portfolio: Position[]): 
   const position = portfolio.find((p) => p.ticker.toUpperCase() === ticker.toUpperCase());
   const context = position
     ? `POSITION DATA:
-Ticker: ${position.ticker} (ASX)
-Shares: ${position.shares}
+Ticker: ${position.ticker}Shares: ${position.shares}
 Cost Basis: $${position.cost_basis} per share
 Date Acquired: ${position.date_acquired ?? 'unknown'}
 Original Thesis: "${position.thesis ?? 'not recorded'}"`
     : `User does NOT currently hold ${ticker}. Analyze as a prospective position.`;
 
-  return `You are Cerna Trading, performing a comprehensive FUNDAMENTAL ANALYSIS on ${ticker} (ASX).
+  return `You are Cerna Trading, performing a comprehensive FUNDAMENTAL ANALYSIS on ${ticker} .
 
 ${context}
 
@@ -108,7 +107,7 @@ Cite all data sources inline. ${DISCLAIMER}`;
 }
 
 export function buildTechnicalPrompt(ticker: string): string {
-  return `You are Cerna Trading, performing a TECHNICAL ANALYSIS on ${ticker} (ASX).
+  return `You are Cerna Trading, performing a TECHNICAL ANALYSIS on ${ticker} .
 
 Search for the latest chart data, price action, and technical indicators for ${ticker}.AX.
 
@@ -160,7 +159,7 @@ export function buildAnalystPrompt(ticker: string, portfolio: Position[]): strin
 - Does analyst consensus support the thesis? [Yes/No + brief explanation]\n`
     : '';
 
-  return `You are Cerna Trading, compiling an ANALYST CONSENSUS REPORT for ${ticker} (ASX).
+  return `You are Cerna Trading, compiling an ANALYST CONSENSUS REPORT for ${ticker} .
 
 Search for the latest analyst ratings, price targets, and estimate revisions for ${ticker}.AX.
 
@@ -202,9 +201,9 @@ Cite all sources inline. ${DISCLAIMER}`;
 
 export function buildPeersPrompt(ticker: string, portfolio: Position[]): string {
   const held = portfolio.map((p) => p.ticker).join(', ') || 'none';
-  return `You are Cerna Trading, running a PEER COMPARISON for ${ticker} (ASX).
+  return `You are Cerna Trading, running a PEER COMPARISON for ${ticker} .
 
-Identify 3-4 direct ASX-listed peers of ${ticker} in the same sector/industry. Present a side-by-side comparison table:
+Identify 3-4 direct listed peers of ${ticker} in the same sector/industry. Present a side-by-side comparison table:
 
 **${ticker} — Peer Comparison**
 
@@ -247,7 +246,7 @@ export function buildValuationPrompt(ticker: string, portfolio: Position[]): str
 - Fair value range suggests [you bought well below / near / above fair value]\n`
     : '';
 
-  return `You are Cerna Trading, building a simplified VALUATION MODEL for ${ticker} (ASX).
+  return `You are Cerna Trading, building a simplified VALUATION MODEL for ${ticker} .
 
 Search for the latest financial data needed to estimate fair value for ${ticker}.AX.
 
@@ -304,7 +303,7 @@ ${positionList}
 
 Cash available: $${cashAvailable}
 
-Search for current prices, key metrics, and analyst ratings for ALL of these tickers on ASX.
+Search for current prices, key metrics, and analyst ratings for ALL of these tickers.
 
 **PORTFOLIO HEALTH REPORT**
 

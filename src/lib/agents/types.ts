@@ -2,7 +2,7 @@
  * Phase 7B — Agent Backend Types
  */
 
-export type AgentName = 'screen' | 'analyze' | 'brief' | 'portfolio';
+export type AgentName = 'screen' | 'analyze' | 'brief' | 'portfolio' | 'trade_log';
 
 export type AgentModel = 'gemini-2.5-pro' | 'gemini-2.5-flash';
 
@@ -40,7 +40,23 @@ export interface PortfolioArgs {
   check_type: PortfolioCheckType;
 }
 
-export type ToolName = 'screen_asx' | 'analyze_stock' | 'brief_market' | 'check_portfolio';
+export type ToolName =
+  | 'screen_stocks'
+  | 'analyze_stock'
+  | 'brief_market'
+  | 'check_portfolio'
+  | 'log_trade';
+
+export type TradeAction = 'buy' | 'sell' | 'add' | 'trim';
+
+export interface LogTradeArgs {
+  ticker: string;
+  action: TradeAction;
+  shares: number;
+  price: number;
+  exchange?: string;
+  currency?: string;
+}
 
 export interface ToolCall {
   name: ToolName;

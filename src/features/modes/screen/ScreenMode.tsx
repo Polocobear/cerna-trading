@@ -296,7 +296,7 @@ export function ScreenMode({
             className="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition-smooth glow-primary-hover min-h-[44px] flex items-center justify-center gap-2"
           >
             <Search size={16} />
-            Screen ASX
+            Screen
           </button>
         </div>
 
@@ -436,7 +436,7 @@ export function ScreenMode({
       {trigger === 0 && initialMessages.length === 0 ? (
         <EmptyState
           Icon={Search}
-          title="Screen the ASX for opportunities"
+          title="Screen for opportunities"
           description="Pick a strategy, tune the filters, and let Cerna find stocks that match."
         />
       ) : (

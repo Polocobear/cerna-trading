@@ -45,7 +45,7 @@ export function StepReady({ displayName, risk, positionCount, onComplete, submit
           className="w-full flex items-center gap-3 p-4 rounded-xl bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium transition-smooth glow-primary-hover min-h-[56px] disabled:opacity-50"
         >
           <Search size={20} />
-          <span className="flex-1 text-left">Screen ASX for opportunities</span>
+          <span className="flex-1 text-left">Screen for opportunities</span>
         </button>
         <button
           type="button"

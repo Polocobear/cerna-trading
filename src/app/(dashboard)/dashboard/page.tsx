@@ -67,6 +67,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       initialWatchlist={watchlist}
       initialJournal={journal}
       userEmail={user.email ?? ''}
+      userId={user.id}
       initialView={initialView}
     />
   );

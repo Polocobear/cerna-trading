@@ -36,7 +36,7 @@ export function buildDefaultUserMessage(mode: SonarMode, controls: ModeControls 
     case 'screen': {
       const sector = controls.sector && controls.sector !== 'All' ? controls.sector : 'any sector';
       const cap = controls.marketCap && controls.marketCap !== 'All' ? controls.marketCap : 'any market cap';
-      return `Find undervalued ASX stocks in ${sector} with ${cap} market cap.`;
+      return `Find undervalued stocks in ${sector} with ${cap} market cap.`;
     }
     case 'analyze': {
       const ticker = controls.ticker?.toUpperCase() ?? '';

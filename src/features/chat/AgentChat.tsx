@@ -25,13 +25,15 @@ const AGENT_ICONS: Record<AgentName, typeof Search> = {
   analyze: BarChart3,
   brief: Newspaper,
   portfolio: Wallet,
+  trade_log: Wallet,
 };
 
 const AGENT_LABELS: Record<AgentName, string> = {
-  screen: 'ASX Screener',
+  screen: 'Stock Screener',
   analyze: 'Fundamentals Agent',
   brief: 'Market Brief',
   portfolio: 'Portfolio Agent',
+  trade_log: 'Trade Logger',
 };
 
 function chatMessageToAgent(m: ChatMessage): AgentChatMessage {

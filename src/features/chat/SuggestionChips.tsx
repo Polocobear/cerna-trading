@@ -6,7 +6,7 @@ import type { Position } from '@/types/portfolio';
 /**
  * Build up to 4 context-aware starter prompts. Top holdings (ranked by shares*cost_basis)
  * feed personalised suggestions; watchlist provides analysis starters; otherwise
- * we fall back to general ASX research prompts.
+ * we fall back to general market research prompts.
  */
 export function getDefaultSuggestions(
   positions: Position[],
@@ -22,7 +22,7 @@ export function getDefaultSuggestions(
   const out: string[] = [];
   if (top) out.push(`Should I hold ${top}?`);
   if (watchTop && watchTop !== top) out.push(`Analyze ${watchTop} fundamentals`);
-  out.push("What's moving on ASX today?");
+  out.push("What's moving in the markets today?");
   if (open.length > 0) out.push("How's my portfolio looking?");
   else out.push('Screen for dividend stocks');
   return out.slice(0, 4);
