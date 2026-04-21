@@ -6,6 +6,8 @@ import type { ChatMessage } from '@/types/chat';
 import type { Position } from '@/types/portfolio';
 import { useAgentChat, type AgentStatus as HookAgentStatus, type AgentChatMessage } from '@/lib/agents/use-agent-chat';
 import type { AgentName } from '@/lib/agents/types';
+import { useAlerts } from '@/lib/alerts/use-alerts';
+import { AlertBanner } from '@/features/alerts/AlertBanner';
 import { CitationCard } from './CitationCard';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
@@ -28,7 +30,7 @@ const AGENT_ICONS: Record<AgentName, typeof Search> = {
 };
 
 const AGENT_LABELS: Record<AgentName, string> = {
-  screen: 'ASX Screener',
+  screen: 'Stock Screener',
   analyze: 'Fundamentals Agent',
   brief: 'Market Brief',
   portfolio: 'Portfolio Agent',
@@ -55,8 +57,6 @@ function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
 }
 
 function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
-  // AgentStatusCard only knows 'running' | 'complete' — collapse pending→running for visual simplicity,
-  // and error→complete with an error note.
   const state: 'running' | 'complete' = s.status === 'complete' || s.status === 'error' ? 'complete' : 'running';
   const completionNote =
     s.status === 'error'
@@ -88,17 +88,17 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
     loadSession,
   } = useAgentChat({ sessionId, depth });
 
+  const { alerts, dismissAlert, markRead } = useAlerts();
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const lastSentRef = useRef<string>('');
 
-  // When initialMessages arrive (session loaded from history), push them into the hook.
   useEffect(() => {
     loadSession(initialMessages.map(chatMessageToAgent));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMessages]);
 
-  // Relay session titles up (for history sidebar refresh).
   useEffect(() => {
     if (sessionTitle && onSessionTitle) onSessionTitle(sessionTitle);
   }, [sessionTitle, onSessionTitle]);
@@ -135,13 +135,19 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
     [sendMessage]
   );
 
+  const handleAlertAsk = useCallback(
+    (message: string) => {
+      void handleSend(message, depth);
+    },
+    [handleSend, depth]
+  );
+
   const retry = useCallback(() => {
     if (lastSentRef.current) void sendMessage(lastSentRef.current);
   }, [sendMessage]);
 
   const isEmpty = messages.length === 0 && !isStreaming && !isLoading;
 
-  // Agent cards visible while we have statuses and any are not yet complete/error.
   const showAgentCards =
     agentStatuses.length > 0 &&
     agentStatuses.some((s) => s.status !== 'complete' && s.status !== 'error');
@@ -150,6 +156,14 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
 
   return (
     <div className="flex flex-col h-full">
+      {/* Proactive alerts — above messages */}
+      <AlertBanner
+        alerts={alerts}
+        onDismiss={dismissAlert}
+        onMarkRead={markRead}
+        onAskAbout={handleAlertAsk}
+      />
+
       <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto custom-scrollbar">
         {isEmpty ? (
           <div className="min-h-full flex items-center justify-center px-4 py-10">
@@ -176,7 +190,6 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
               const showShimmer = isLastAssistant && m.content.length === 0;
               return (
                 <div key={m.id} className="space-y-3">
-                  {/* Agent cards appear directly above the current streaming assistant msg. */}
                   {isLastAssistant && (showAgentCards || (allComplete && isStreaming)) && (
                     <div className="space-y-2">
                       {agentStatuses.map((s) => (
@@ -231,7 +244,6 @@ export function AgentChat({ sessionId, initialMessages = [], positions, watchlis
               );
             })}
 
-            {/* If agents started but no assistant placeholder has been created yet, render them here. */}
             {agentStatuses.length > 0 &&
               !messages.some((m) => m.role === 'assistant') && (
                 <div className="space-y-2">
