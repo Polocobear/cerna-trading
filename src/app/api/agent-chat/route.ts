@@ -13,6 +13,10 @@ import { executeAgents } from '@/lib/agents/executor';
 import { synthesize, dedupeSources } from '@/lib/agents/synthesizer';
 import { generateFollowUps } from '@/lib/agents/follow-ups';
 import { generateSessionTitle } from '@/lib/agents/session-title';
+import { buildIntelligenceContext } from '@/lib/memory/context-builder';
+import { extractMemories } from '@/lib/memory/manager';
+import { extractDecisions, matchDecisionsToTrades } from '@/lib/memory/decision-tracker';
+import { summarizeSession } from '@/lib/memory/session-summarizer';
 import type {
   AgentEvent,
   AgentName,
@@ -187,6 +191,11 @@ export async function POST(req: Request) {
 
   const portfolioCtx = buildPortfolioContext(profile, positions, watchlist);
 
+  // Build intelligence context (memory + decisions + sessions) — non-blocking best-effort
+  const intelCtx = await buildIntelligenceContext(user.id, sessionId, supabase).catch(() => ({
+    memory: '', decisions: '', sessions: '', behavioral: '', alerts: '', full: '',
+  }));
+
   // Save user message immediately (mode = 'ask' to fit existing schema).
   await supabase.from('chat_messages').insert({
     user_id: user.id,
@@ -258,6 +267,13 @@ export async function POST(req: Request) {
             deepRemaining: getDeepUsageRemaining(user.id),
           });
           close();
+
+          // Async post-processing — non-blocking
+          Promise.allSettled([
+            extractMemories(user.id, sessionId, [message], fullResponse, supabase),
+            matchDecisionsToTrades(user.id, supabase),
+          ]).catch(console.error);
+
           return;
         }
 
@@ -306,8 +322,8 @@ export async function POST(req: Request) {
           return;
         }
 
-        // (e) synthesize stream
-        const synthStream = synthesize(message, results, portfolioCtx.text);
+        // (e) synthesize stream — inject intelligence context
+        const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full);
         for await (const chunk of synthStream) {
           fullResponse += chunk;
           emit({ type: 'stream', content: chunk });
@@ -356,6 +372,24 @@ export async function POST(req: Request) {
           deepRemaining: getDeepUsageRemaining(user.id),
         });
         close();
+
+        // (k) Async post-processing — runs after stream closes, non-blocking
+        const allMessages = [
+          ...history.map((h) => ({ role: h.role, content: h.content })),
+          { role: 'user' as const, content: message },
+          { role: 'assistant' as const, content: clean },
+        ];
+        const shouldSummarize = allMessages.length >= 10 || isFirstExchange;
+
+        Promise.allSettled([
+          extractMemories(user.id, sessionId, [message], clean, supabase),
+          extractDecisions(user.id, sessionId, clean, supabase),
+          shouldSummarize
+            ? summarizeSession(user.id, sessionId, allMessages, supabase)
+            : Promise.resolve(),
+          matchDecisionsToTrades(user.id, supabase),
+        ]).catch(console.error);
+
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'unknown error';
         emit({

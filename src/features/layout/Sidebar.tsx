@@ -4,6 +4,8 @@ import { MessageSquare, Search, BarChart3, Newspaper, Wallet, Plus } from 'lucid
 import type { ViewId } from './AppShell';
 import { SidebarHistory, type SessionSummary } from './SidebarHistory';
 import { SidebarPortfolio } from './SidebarPortfolio';
+import { AlertBadge } from '@/features/alerts/AlertBadge';
+import { useAlerts } from '@/lib/alerts/use-alerts';
 import type { Position } from '@/types/portfolio';
 import { cn } from '@/lib/utils/cn';
 
@@ -43,6 +45,7 @@ export function Sidebar({
   variant = 'desktop',
 }: SidebarProps) {
   const isMobile = variant === 'mobile';
+  const { unreadCount } = useAlerts();
 
   // Desktop: hidden below 768px, collapsed 64px at 768-1023px, full 280px at 1024px+
   // Mobile variant (inside drawer): always full width
@@ -111,6 +114,11 @@ export function Sidebar({
               )}
               <Icon size={18} strokeWidth={1.75} className="shrink-0" />
               <span className="whitespace-nowrap sidebar-label">{label}</span>
+              {id === 'chat' && (
+                <span className="sidebar-label">
+                  <AlertBadge count={unreadCount} />
+                </span>
+              )}
             </button>
           );
         })}

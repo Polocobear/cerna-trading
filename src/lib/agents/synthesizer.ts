@@ -24,13 +24,15 @@ function formatAgentResults(results: AgentResult[]): string {
 
 /**
  * Stream-synthesize final response. Yields text chunks as they arrive.
+ * intelligenceContext is injected into the system prompt for memory-aware responses.
  */
 export async function* synthesize(
   userQuery: string,
   agentResults: AgentResult[],
-  portfolioContext: string
+  portfolioContext: string,
+  intelligenceContext?: string
 ): AsyncGenerator<string, void, unknown> {
-  const systemPrompt = buildSynthesizerPrompt(portfolioContext);
+  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext);
   const agentBlock = formatAgentResults(agentResults);
 
   const consolidatedSources = dedupeSources(agentResults);
