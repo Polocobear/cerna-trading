@@ -174,10 +174,13 @@ function buildTimeoutFallback(results: AgentResult[]): string {
 }
 
 export async function POST(req: Request) {
+  const pipelineStart = Date.now();
+  console.error(`[agent-chat] START at ${new Date().toISOString()}`);
   let body: AgentChatRequest;
   try {
     body = (await req.json()) as AgentChatRequest;
-  } catch {
+  } catch (error) {
+    console.error(`[agent-chat] FAILED at ${Date.now() - pipelineStart}ms:`, error);
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
@@ -275,11 +278,17 @@ export async function POST(req: Request) {
 
       try {
         // (a) orchestrate
-        const plan = await runOrchestrator({
-          userMessage: message,
-          history: history.slice(-10),
-          exchange: exchangeCtx,
-        });
+        let plan: Awaited<ReturnType<typeof runOrchestrator>>;
+        try {
+          plan = await runOrchestrator({
+            userMessage: message,
+            history: history.slice(-10),
+            exchange: exchangeCtx,
+          });
+        } finally {
+          console.error(`[agent-chat] ORCHESTRATOR complete: ${Date.now() - pipelineStart}ms`);
+        }
+        console.error(`[agent-chat] ROUTING:`, JSON.stringify(plan.toolCalls));
 
         // direct response path
         if (plan.directResponse && plan.toolCalls.length === 0) {
@@ -333,18 +342,23 @@ export async function POST(req: Request) {
         }
 
         // (d) execute
-        const results: AgentResult[] = await executeAgents(
-          plan.toolCalls,
-          {
-            portfolioContext: portfolioCtx.text,
-            exchange: exchangeCtx,
-            isDeepAvailable: useDeep,
-            supabase,
-            userId: user.id,
-            userMessage: message,
-          },
-          (evt) => emit(evt)
-        );
+        let results: AgentResult[];
+        try {
+          results = await executeAgents(
+            plan.toolCalls,
+            {
+              portfolioContext: portfolioCtx.text,
+              exchange: exchangeCtx,
+              isDeepAvailable: useDeep,
+              supabase,
+              userId: user.id,
+              userMessage: message,
+            },
+            (evt) => emit(evt)
+          );
+        } finally {
+          console.error(`[agent-chat] AGENTS complete: ${Date.now() - pipelineStart}ms`);
+        }
 
         const allFailed = results.length > 0 && results.every((r) => r.status === 'error');
         if (allFailed) {
@@ -395,10 +409,14 @@ export async function POST(req: Request) {
           return;
         }
 
-        const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full);
-        for await (const chunk of synthStream) {
-          fullResponse += chunk;
-          emit({ type: 'stream', content: chunk });
+        try {
+          const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full);
+          for await (const chunk of synthStream) {
+            fullResponse += chunk;
+            emit({ type: 'stream', content: chunk });
+          }
+        } finally {
+          console.error(`[agent-chat] SYNTHESIZER complete: ${Date.now() - pipelineStart}ms`);
         }
 
         // (f) strip <sources>…</sources> from saved text, emit sources event
@@ -465,6 +483,7 @@ export async function POST(req: Request) {
         ]).catch(console.error);
 
       } catch (err) {
+        console.error(`[agent-chat] FAILED at ${Date.now() - pipelineStart}ms:`, err);
         const safeMsg = fullResponse.trim().length > 0
           ? '\n\nThe response was cut short because the request took too long. Please ask again if you want me to continue.'
           : "\n\nI couldn't process that request right now. Please try again in a moment.";
