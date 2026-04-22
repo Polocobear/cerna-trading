@@ -16,7 +16,10 @@ export async function POST(req: NextRequest) {
     if (!message) return NextResponse.json({ error: 'Missing message' }, { status: 400 });
 
     const context = await buildContext(supabase, user.id, sessionId);
-    const result = await runOrchestrator(message, { exchangeCtx: context.exchangeCtx });
+    const result = await runOrchestrator(message, {
+      exchangeCtx: context.exchangeCtx,
+      investmentStrategy: context.profile?.investment_strategy ?? null,
+    });
 
     return NextResponse.json({
       toolCalls: result.toolCalls ?? [],

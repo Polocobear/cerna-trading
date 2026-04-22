@@ -272,6 +272,7 @@ export async function POST(req: Request) {
           plan = await runOrchestrator(message, {
             history: history.slice(-10),
             exchangeCtx: exchangeCtx,
+            investmentStrategy: profile?.investment_strategy ?? null,
           });
         } finally {
           console.error(`[agent-chat] ORCHESTRATOR complete: ${Date.now() - pipelineStart}ms`);
