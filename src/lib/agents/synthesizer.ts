@@ -52,18 +52,23 @@ async function readWithTimeout(
   }
 }
 
-function formatAgentResults(results: AgentResult[]): string {
+function formatAgentResults(results: AgentResult[]): { agentBlock: string; failedAgents: string[] } {
   const sections: string[] = [];
+  const failedAgents: string[] = [];
   for (const r of results) {
-    const header = `## ${r.agent.toUpperCase()} AGENT — ${r.description}${r.status === 'error' ? ' (FAILED)' : ''}`;
-    const body = r.status === 'success' ? r.data : `Agent failed: ${r.error ?? 'unknown error'}. Proceed without this input.`;
+    if (r.status === 'error') {
+      failedAgents.push(r.description);
+      continue;
+    }
+    const header = `## ${r.agent.toUpperCase()} AGENT — ${r.description}`;
+    const body = r.data;
     const sourcesList =
       r.sources.length > 0
         ? `\n\nAgent sources:\n${r.sources.map((s) => `- [${s.title || s.domain}] ${s.url}`).join('\n')}`
         : '';
     sections.push(`${header}\n\n${body}${sourcesList}`);
   }
-  return sections.join('\n\n---\n\n');
+  return { agentBlock: sections.join('\n\n---\n\n'), failedAgents };
 }
 
 /**
@@ -78,7 +83,7 @@ export async function* synthesize(
   deadlineMs?: number
 ): AsyncGenerator<string, void, unknown> {
   const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext);
-  const agentBlock = formatAgentResults(agentResults);
+  const { agentBlock, failedAgents } = formatAgentResults(agentResults);
 
   const consolidatedSources = dedupeSources(agentResults);
   const sourceHints =
@@ -88,7 +93,11 @@ export async function* synthesize(
           .join('\n')}`
       : '';
 
-  const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
+  const failedHint = failedAgents.length > 0
+    ? `\n\n# Failed Agents\nThe following research tasks failed to complete: ${failedAgents.join(', ')}.\nBriefly note this failure at the end of your response, e.g., "Note: I wasn't able to complete [failed task] due to a timeout. Ask me to try that specifically if you'd like." Do not output raw error messages.`
+    : '';
+
+  const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}${failedHint}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
 
   const remaining = Math.max(5000, Math.min(15000, (deadlineMs ?? Date.now() + 15000) - Date.now()));
 

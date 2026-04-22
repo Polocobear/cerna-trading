@@ -88,7 +88,7 @@ export interface AgentResult {
 
 export type AgentEvent =
   | { type: 'agent_start'; agent: AgentName; description: string }
-  | { type: 'agent_complete'; agent: AgentName; summary: string }
+  | { type: 'agent_complete'; agent: AgentName; summary: string; sources?: AgentSource[] }
   | { type: 'agent_error'; agent: AgentName; error: string };
 
 export interface PortfolioContextPayload {

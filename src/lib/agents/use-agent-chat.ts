@@ -15,6 +15,7 @@ export interface AgentStatus {
   status: AgentStatusState;
   summary?: string;
   error?: string;
+  sources?: Source[];
 }
 
 export interface Source {
@@ -59,7 +60,7 @@ type PlanEvent = {
   agents: Array<{ name: AgentName; description: string }>;
 };
 type AgentStartEvent = { type: 'agent_start'; agent: AgentName; description: string };
-type AgentCompleteEvent = { type: 'agent_complete'; agent: AgentName; summary: string };
+type AgentCompleteEvent = { type: 'agent_complete'; agent: AgentName; summary: string; sources?: Source[] };
 type AgentErrorEvent = { type: 'agent_error'; agent: AgentName; error: string };
 type StreamEvent = { type: 'stream'; content: string };
 type SourcesEvent = { type: 'sources'; sources: Source[] };
@@ -334,7 +335,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
                 setAgentStatuses((prev) =>
                   prev.map((s) =>
                     s.name === evt.agent
-                      ? { ...s, status: 'complete', summary: evt.summary }
+                      ? { ...s, status: 'complete', summary: evt.summary, sources: evt.sources }
                       : s
                   )
                 );

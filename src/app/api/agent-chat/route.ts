@@ -160,19 +160,6 @@ function summarizePartialText(text: string, limit = 220): string {
   return trimmed.slice(0, limit) + (trimmed.length > limit ? '...' : '');
 }
 
-function buildTimeoutFallback(results: AgentResult[]): string {
-  const successful = results.filter((result) => result.status === 'success').slice(0, 2);
-  const snippets = successful
-    .map((result) => `- ${result.description}: ${summarizePartialText(result.data)}`)
-    .filter((snippet) => snippet.length > 4);
-
-  if (snippets.length === 0) {
-    return "I gathered some research, but the response took too long to finish. Please try again and I'll retry it.";
-  }
-
-  return `I gathered partial research, but the response took too long to finish. Here is what completed:\n${snippets.join('\n')}\n\nAsk again if you want me to continue from there.`;
-}
-
 export async function POST(req: Request) {
   const pipelineStart = Date.now();
   const pipelineDeadline = pipelineStart + 55000;
@@ -386,31 +373,6 @@ export async function POST(req: Request) {
         }
 
         // (e) synthesize stream — inject intelligence context
-        if (remainingBudgetMs() < SYNTHESIS_MIN_BUDGET_MS) {
-          const fallback = buildTimeoutFallback(results);
-          const timeoutSources = dedupeSources(results);
-          emit({ type: 'stream', content: fallback });
-          if (timeoutSources.length > 0) {
-            emit({ type: 'sources', sources: timeoutSources });
-          }
-          fullResponse = fallback;
-          await supabase.from('chat_messages').insert({
-            user_id: user.id,
-            session_id: sessionId,
-            mode: 'ask',
-            role: 'assistant',
-            content: fullResponse,
-            citations: timeoutSources,
-          });
-          emit({
-            type: 'done',
-            model: results.some((r) => r.model === 'gemini-2.5-pro') ? 'mixed' : 'flash',
-            deepRemaining: getDeepUsageRemaining(user.id),
-          });
-          close();
-          return;
-        }
-
         try {
           const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full, pipelineDeadline);
           for await (const chunk of synthStream) {

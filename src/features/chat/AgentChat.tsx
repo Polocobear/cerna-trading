@@ -69,7 +69,7 @@ function sanitizeAgentStatusNote(note?: string): string | undefined {
 }
 
 function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
-  const state: 'running' | 'complete' = s.status === 'complete' || s.status === 'error' ? 'complete' : 'running';
+  const state = s.status;
   const completionNote =
     s.status === 'error'
       ? sanitizeAgentStatusNote(s.error)
@@ -83,6 +83,7 @@ function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
     Icon: AGENT_ICONS[s.name],
     state,
     completionNote,
+    sources: s.sources,
   };
 }
 
@@ -282,6 +283,26 @@ export function AgentChat({
             {agentStatuses.length > 0 &&
               !messages.some((m) => m.role === 'assistant') && (
                 <div className="space-y-2">
+                  {(() => {
+                    const totalAgents = agentStatuses.length;
+                    const completedAgents = agentStatuses.filter(s => s.status === 'complete' || s.status === 'error').length;
+                    const showTopLevel = totalAgents > 0 && (completedAgents < totalAgents || (allComplete && isStreaming));
+                    if (!showTopLevel) return null;
+                    
+                    let text = '';
+                    if (completedAgents < totalAgents) {
+                      text = completedAgents === 0 
+                        ? `🔍 Researching... (${totalAgents} agent${totalAgents > 1 ? 's' : ''} working)`
+                        : `🔍 Researching... (${completedAgents} of ${totalAgents} complete)`;
+                    } else {
+                      text = '✍️ Synthesizing findings...';
+                    }
+                    return (
+                      <div className="text-[13px] font-medium text-cerna-primary mb-1 animate-agent-slide-in">
+                        {text}
+                      </div>
+                    );
+                  })()}
                   {agentStatuses.map((s) => (
                     <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
                   ))}

@@ -334,7 +334,7 @@ async function runResearchAgent(
       enableSearchGrounding: enableSearch,
       temperature: 0.55,
       maxOutputTokens: 3072,
-      requestTimeoutMs: enableSearch ? 25000 : 12000,
+      requestTimeoutMs: enableSearch ? 30000 : 12000,
       retryOptions: {
         maxRetries: enableSearch ? 0 : 1,
         backoffMs: 1000,
@@ -359,13 +359,8 @@ async function runResearchAgent(
       model: usedModel,
     };
   } catch (err) {
-    const status = (err as Error & { status?: number }).status;
-    if (isRetryableGeminiStatus(status) && primary === 'gemini-2.5-pro') {
+    if (primary === 'gemini-2.5-pro' && Date.now() <= deadline - 10000) {
       try {
-        if (Date.now() > deadline - 5000) {
-          throw new Error('Pipeline deadline approached before downgrade attempt');
-        }
-        await waitWithJitter(1000);
         usedModel = 'gemini-2.5-flash';
         const res = await tryCall('gemini-2.5-flash');
         return {
@@ -378,7 +373,6 @@ async function runResearchAgent(
           model: usedModel,
         };
       } catch (fallbackErr) {
-        const msg = safeAgentError(fallbackErr);
         return {
           agent,
           description,
@@ -387,11 +381,10 @@ async function runResearchAgent(
           sources: [],
           executionTime: Date.now() - start,
           model: usedModel,
-          error: msg,
+          error: safeAgentError(fallbackErr),
         };
       }
     }
-    const msg = safeAgentError(err);
     return {
       agent,
       description,
@@ -400,7 +393,7 @@ async function runResearchAgent(
       sources: [],
       executionTime: Date.now() - start,
       model: usedModel,
-      error: msg,
+      error: safeAgentError(err),
     };
   }
 }
@@ -451,7 +444,7 @@ export async function executeAgents(
     }
 
     if (result.status === 'success') {
-      onEvent({ type: 'agent_complete', agent, summary: summarize(result.data) });
+      onEvent({ type: 'agent_complete', agent, summary: summarize(result.data), sources: result.sources });
     } else {
       onEvent({ type: 'agent_error', agent, error: result.error ?? 'unknown error' });
     }
