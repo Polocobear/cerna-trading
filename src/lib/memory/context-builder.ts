@@ -3,6 +3,9 @@ import { getMemoryContext } from './manager';
 import { getDecisionContext } from './decision-tracker';
 import { getSessionContext } from './session-summarizer';
 import type { IntelligenceContext } from './types';
+import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
+import { buildPortfolioContext, buildExchangeContext } from '@/lib/agents/prompts';
+import type { ExchangeContext } from '@/lib/agents/prompts';
 
 const MAX_TOTAL_CHARS = 4800; // ~1200 tokens
 
@@ -51,4 +54,56 @@ IMPORTANT INSTRUCTIONS FOR USING THIS CONTEXT:
   }
 
   return { memory, decisions, sessions, behavioral, alerts: '', full };
+}
+
+export interface AgentContext {
+  profile: Profile | null;
+  positions: Position[];
+  watchlist: WatchlistItem[];
+  exchangeCtx: ExchangeContext;
+  portfolioContext: string;
+  intelligenceContext: string;
+}
+
+export async function buildContext(
+  supabase: SupabaseClient,
+  userId: string,
+  sessionId: string
+): Promise<AgentContext> {
+  const [positionsRes, profileRes, watchlistRes] = await Promise.all([
+    supabase.from('positions').select('*').eq('user_id', userId).eq('status', 'open'),
+    supabase
+      .from('profiles')
+      .select(
+        'id, display_name, risk_tolerance, smsf_name, investment_strategy, sectors_of_interest, preferred_exchange, preferred_currency, cash_available, created_at, updated_at'
+      )
+      .eq('id', userId)
+      .maybeSingle(),
+    supabase.from('watchlist').select('*').eq('user_id', userId),
+  ]);
+
+  const positions = (positionsRes.data ?? []) as Position[];
+  const profile = (profileRes.data ?? null) as Profile | null;
+  const watchlist = (watchlistRes.data ?? []) as WatchlistItem[];
+
+  const portfolioCtx = buildPortfolioContext(profile, positions, watchlist);
+  const exchangeCtx = buildExchangeContext(profile, positions);
+
+  const intelCtx = await buildIntelligenceContext(userId, sessionId, supabase).catch(() => ({
+    memory: '',
+    decisions: '',
+    sessions: '',
+    behavioral: '',
+    alerts: '',
+    full: '',
+  }));
+
+  return {
+    profile,
+    positions,
+    watchlist,
+    exchangeCtx,
+    portfolioContext: portfolioCtx.text,
+    intelligenceContext: intelCtx.full,
+  };
 }

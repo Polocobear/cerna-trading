@@ -106,6 +106,7 @@ export function AgentChat({
     deepRemaining,
     sessionTitle,
     error,
+    phase,
     sendMessage,
     loadSession,
   } = useAgentChat({ sessionId, depth });
@@ -183,13 +184,9 @@ export function AgentChat({
     if (lastSentRef.current) void sendMessage(lastSentRef.current);
   }, [sendMessage]);
 
-  const isEmpty = messages.length === 0 && !isStreaming && !isLoading;
+  const isEmpty = messages.length === 0 && phase === 'idle' && !isStreaming && !isLoading;
 
-  const showAgentCards =
-    agentStatuses.length > 0 &&
-    agentStatuses.some((s) => s.status !== 'complete' && s.status !== 'error');
-  const allComplete =
-    agentStatuses.length > 0 && agentStatuses.every((s) => s.status === 'complete' || s.status === 'error');
+  const showAgentCards = agentStatuses.length > 0 && phase !== 'idle' && phase !== 'done';
 
   return (
     <div className="flex flex-col h-full">
@@ -227,8 +224,31 @@ export function AgentChat({
               const showShimmer = isLastAssistant && m.content.length === 0;
               return (
                 <div key={m.id} className="space-y-3">
-                  {isLastAssistant && (showAgentCards || (allComplete && isStreaming)) && (
+                  {isLastAssistant && showAgentCards && (
                     <div className="space-y-2">
+                      {(() => {
+                        const showTopLevel = phase === 'orchestrating' || phase === 'researching' || phase === 'synthesizing';
+                        if (!showTopLevel) return null;
+                        
+                        let text = '';
+                        if (phase === 'orchestrating') {
+                          text = '🤔 Thinking...';
+                        } else if (phase === 'researching') {
+                          const totalAgents = agentStatuses.length;
+                          const completedAgents = agentStatuses.filter(s => s.status === 'complete' || s.status === 'error').length;
+                          text = completedAgents === 0 
+                            ? `🔍 Researching... (${totalAgents} agent${totalAgents > 1 ? 's' : ''} working)`
+                            : `🔍 Researching... (${completedAgents} of ${totalAgents} complete)`;
+                        } else if (phase === 'synthesizing') {
+                          text = '✍️ Writing answer...';
+                        }
+                        
+                        return (
+                          <div className="text-[13px] font-medium text-cerna-primary mb-1 animate-agent-slide-in">
+                            {text}
+                          </div>
+                        );
+                      })()}
                       {agentStatuses.map((s) => (
                         <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
                       ))}
@@ -280,35 +300,6 @@ export function AgentChat({
                 </div>
               );
             })}
-
-            {agentStatuses.length > 0 &&
-              !messages.some((m) => m.role === 'assistant') && (
-                <div className="space-y-2">
-                  {(() => {
-                    const totalAgents = agentStatuses.length;
-                    const completedAgents = agentStatuses.filter(s => s.status === 'complete' || s.status === 'error').length;
-                    const showTopLevel = totalAgents > 0 && (completedAgents < totalAgents || (allComplete && isStreaming));
-                    if (!showTopLevel) return null;
-                    
-                    let text = '';
-                    if (completedAgents < totalAgents) {
-                      text = completedAgents === 0 
-                        ? `🔍 Researching... (${totalAgents} agent${totalAgents > 1 ? 's' : ''} working)`
-                        : `🔍 Researching... (${completedAgents} of ${totalAgents} complete)`;
-                    } else {
-                      text = '✍️ Synthesizing findings...';
-                    }
-                    return (
-                      <div className="text-[13px] font-medium text-cerna-primary mb-1 animate-agent-slide-in">
-                        {text}
-                      </div>
-                    );
-                  })()}
-                  {agentStatuses.map((s) => (
-                    <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
-                  ))}
-                </div>
-              )}
 
             {error && (
               <div

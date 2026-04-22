@@ -149,21 +149,25 @@ const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
 
 export interface OrchestratorInput {
   userMessage: string;
-  history: Array<{ role: 'user' | 'assistant'; content: string }>;
-  exchange: ExchangeContext;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  context: { exchangeCtx: ExchangeContext };
 }
 
-export async function runOrchestrator(input: OrchestratorInput): Promise<OrchestratorPlan> {
+export async function runOrchestrator(
+  userMessage: string,
+  context: { exchangeCtx: ExchangeContext; history?: Array<{ role: 'user' | 'assistant'; content: string }> }
+): Promise<{ toolCalls: ToolCall[]; directReply: string | null; deep?: boolean }> {
+  const history = context.history ?? [];
   const messages = [
-    ...input.history.map((h) => ({ role: h.role, content: h.content })),
-    { role: 'user' as const, content: input.userMessage },
+    ...history.map((h) => ({ role: h.role, content: h.content })),
+    { role: 'user' as const, content: userMessage },
   ];
 
   let result: GeminiV2NonStreamResult;
   try {
     result = await callGeminiV2({
       model: 'gemini-2.5-flash',
-      systemPrompt: buildOrchestratorSystemPrompt(input.exchange),
+      systemPrompt: buildOrchestratorSystemPrompt(context.exchangeCtx),
       messages,
       tools: TOOL_DECLARATIONS,
       temperature: 0.2,
@@ -204,8 +208,8 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
 
   if (toolCalls.length === 0) {
     const trimmed = result.text.trim();
-    return { directResponse: trimmed || 'How can I help with your portfolio today?', toolCalls: [] };
+    return { directReply: trimmed || 'How can I help with your portfolio today?', toolCalls: [] };
   }
 
-  return { toolCalls };
+  return { toolCalls, directReply: null };
 }
