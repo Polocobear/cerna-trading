@@ -167,7 +167,7 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
       messages,
       tools: TOOL_DECLARATIONS,
       temperature: 0.2,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 2048,
       requestTimeoutMs: 15000,
       retryOptions: {
         maxRetries: 1,

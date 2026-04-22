@@ -108,7 +108,7 @@ export async function extractDecisions(
       systemPrompt: 'You extract actionable investment recommendations from financial advisor responses. Output only valid JSON.',
       userMessage: `${DECISION_EXTRACTION_PROMPT}\n\nResponse to analyze:\n${response.slice(0, 3000)}`,
       temperature: 0.1,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 2048,
       responseMimeType: 'application/json',
     });
 

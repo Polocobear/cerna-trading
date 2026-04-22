@@ -129,7 +129,7 @@ export async function extractMemories(
       systemPrompt: 'You extract structured memory entries from conversations. Output only valid JSON.',
       userMessage: prompt,
       temperature: 0.2,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 2048,
       responseMimeType: 'application/json',
     });
 

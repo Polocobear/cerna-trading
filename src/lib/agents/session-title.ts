@@ -21,7 +21,7 @@ export async function generateSessionTitle(
       systemPrompt: buildSessionTitlePrompt(),
       userMessage: body,
       temperature: 0.4,
-      maxOutputTokens: 32,
+      maxOutputTokens: 64,
       requestTimeoutMs: 2000,
       retryOptions: {
         maxRetries: 0,

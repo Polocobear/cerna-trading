@@ -333,7 +333,7 @@ async function runResearchAgent(
       userMessage,
       enableSearchGrounding: enableSearch,
       temperature: 0.55,
-      maxOutputTokens: 8192,
+      maxOutputTokens: model === 'gemini-2.5-pro' ? 32768 : 8192,
       requestTimeoutMs: enableSearch ? 30000 : 12000,
       retryOptions: {
         maxRetries: enableSearch ? 0 : 1,

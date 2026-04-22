@@ -294,7 +294,7 @@ function buildV2Body(opts: GeminiV2Options): Record<string, unknown> {
 
   const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.6,
-    maxOutputTokens: opts.maxOutputTokens ?? 4096,
+    maxOutputTokens: opts.maxOutputTokens,
   };
   if (opts.responseMimeType) {
     generationConfig.responseMimeType = opts.responseMimeType;
