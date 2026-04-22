@@ -175,6 +175,7 @@ function buildTimeoutFallback(results: AgentResult[]): string {
 
 export async function POST(req: Request) {
   const pipelineStart = Date.now();
+  const pipelineDeadline = pipelineStart + 55000;
   console.error(`[agent-chat] START at ${new Date().toISOString()}`);
   let body: AgentChatRequest;
   try {
@@ -353,6 +354,7 @@ export async function POST(req: Request) {
               supabase,
               userId: user.id,
               userMessage: message,
+              deadlineMs: pipelineDeadline,
             },
             (evt) => emit(evt)
           );
@@ -517,10 +519,6 @@ export async function POST(req: Request) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
-    },
-  });
-}
-alive',
     },
   });
 }
