@@ -9,6 +9,8 @@ export interface Profile {
   smsf_name: string | null;
   investment_strategy: string | null;
   sectors_of_interest: string[] | null;
+  preferred_exchange: string | null;
+  preferred_currency: string | null;
   cash_available: number;
   created_at: string;
   updated_at: string;

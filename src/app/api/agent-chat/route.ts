@@ -180,7 +180,13 @@ export async function POST(req: Request) {
 
   const [positionsRes, profileRes, watchlistRes, priorMsgsRes] = await Promise.all([
     supabase.from('positions').select('*').eq('user_id', user.id).eq('status', 'open'),
-    supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+    supabase
+      .from('profiles')
+      .select(
+        'id, display_name, risk_tolerance, smsf_name, investment_strategy, sectors_of_interest, preferred_exchange, preferred_currency, cash_available, created_at, updated_at'
+      )
+      .eq('id', user.id)
+      .maybeSingle(),
     supabase.from('watchlist').select('*').eq('user_id', user.id),
     supabase
       .from('chat_messages')

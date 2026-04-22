@@ -42,8 +42,12 @@ function argsToUserMessage(name: string, args: Record<string, unknown>): string 
       const strategy = String(args.strategy ?? 'value');
       const sector = args.sector ? ` in the ${String(args.sector)} sector` : '';
       const cap = args.market_cap && args.market_cap !== 'all' ? ` (${String(args.market_cap)} cap)` : '';
+      const exchange =
+        typeof args.exchange === 'string' && args.exchange.trim()
+          ? ` on ${args.exchange.toUpperCase()}`
+          : '';
       const extra = args.additional_criteria ? `. Additional criteria: ${String(args.additional_criteria)}` : '';
-      return `Screen for ${strategy} stocks${sector}${cap}${extra}. Return 3-5 candidates with full analysis.`;
+      return `Screen for ${strategy} stocks${sector}${cap}${exchange}${extra}. Return 3-5 candidates with full analysis.`;
     }
     case 'analyze_stock': {
       const ticker = String(args.ticker ?? '').toUpperCase();
@@ -78,7 +82,7 @@ function systemPromptFor(
     case 'brief':
       return buildBriefPrompt(portfolioContext, exchange);
     case 'portfolio':
-      return buildPortfolioCheckPrompt(portfolioContext);
+      return buildPortfolioCheckPrompt(portfolioContext, exchange);
     case 'trade_log':
       return '';
   }
@@ -93,9 +97,9 @@ interface ExistingPositionRow {
 }
 
 function inferExchangeFromTicker(ticker: string, fallback: string): string {
-  // 3-letter all-caps is typical of ASX; otherwise default to primary exchange or NYSE
+  // 3-letter all-caps is typical of ASX; otherwise default to the user's primary exchange or ASX
   if (/^[A-Z]{3}$/.test(ticker)) return fallback || 'ASX';
-  return fallback || 'NYSE';
+  return fallback || 'ASX';
 }
 
 function inferCurrencyFromExchange(exchange: string): string {

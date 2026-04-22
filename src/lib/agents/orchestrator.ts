@@ -19,7 +19,7 @@ const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: 'screen_stocks',
     description:
-      "Screen for stocks matching criteria on the user's preferred exchange(s). Use when the user wants to find new investment opportunities.",
+      "Screen for stocks matching criteria. Supports major exchanges including ASX, NYSE, NASDAQ, LSE, TSX, and HKEX. Use the user's preferred exchange unless they explicitly ask for a different one.",
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -36,6 +36,11 @@ const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
           type: 'STRING',
           enum: ['large', 'mid', 'small', 'all'],
           description: 'Optional market cap tier',
+        },
+        exchange: {
+          type: 'STRING',
+          description:
+            'Optional explicit exchange override (e.g. ASX, NYSE, NASDAQ, LSE, TSX, HKEX). Use when the user names a specific exchange.',
         },
         additional_criteria: {
           type: 'STRING',
