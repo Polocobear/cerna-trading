@@ -80,25 +80,26 @@ function toPlanAgents(toolCalls: ToolCall[]): PlannedAgent[] {
 
 function stripSourcesTag(text: string): {
   clean: string;
-  sources: Array<{ title: string; url: string; domain: string }>;
+  sources: Array<{ title: string; url: string; domain: string; snippet?: string }>;
 } {
   const re = /<sources>([\s\S]*?)<\/sources>/i;
   const m = text.match(re);
   let clean = text.replace(re, '').trimEnd();
-  let sources: Array<{ title: string; url: string; domain: string }> = [];
+  let sources: Array<{ title: string; url: string; domain: string; snippet?: string }> = [];
   if (m && m[1]) {
     try {
       const parsed = JSON.parse(m[1].trim());
       if (Array.isArray(parsed)) {
         sources = parsed
           .filter(
-            (s): s is { title?: unknown; url?: unknown; domain?: unknown } =>
+            (s): s is { title?: unknown; url?: unknown; domain?: unknown; snippet?: unknown } =>
               typeof s === 'object' && s !== null
           )
           .map((s) => ({
             title: typeof s.title === 'string' ? s.title : '',
             url: typeof s.url === 'string' ? s.url : '',
             domain: typeof s.domain === 'string' ? s.domain : '',
+            snippet: typeof s.snippet === 'string' ? s.snippet : undefined,
           }))
           .filter((s) => s.url);
       }
@@ -374,7 +375,26 @@ export async function POST(req: Request) {
 
         // (e) synthesize stream — inject intelligence context
         try {
-          const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full, pipelineDeadline);
+          const allSources = results
+            .filter((r) => r.status === 'success')
+            .flatMap((r) => r.sources ?? []);
+
+          const uniqueSources = Array.from(
+            new Map(allSources.map((s) => [s.url, s])).values()
+          );
+
+          const sourcesForPrompt = uniqueSources
+            .map((s, i) => `[${i + 1}] ${s.title} — ${s.domain}\n${s.url}`)
+            .join('\n\n');
+
+          const synthStream = synthesize(
+            message,
+            results,
+            portfolioCtx.text,
+            intelCtx.full,
+            sourcesForPrompt,
+            pipelineDeadline
+          );
           for await (const chunk of synthStream) {
             fullResponse += chunk;
             emit({ type: 'stream', content: chunk });

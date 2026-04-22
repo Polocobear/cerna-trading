@@ -394,23 +394,28 @@ export function buildPortfolioCheckPrompt(
 
 export function buildSynthesizerPrompt(
   portfolioContext: string,
-  intelligenceContext?: string
+  intelligenceContext?: string,
+  sourcesContext?: string
 ): string {
   const intelBlock = intelligenceContext ? `\n\n${intelligenceContext}` : '';
+  const sourcesBlock = sourcesContext
+    ? `\n\n## Available Sources\n\nUse these sources for inline citations [1], [2], etc:\n\n${sourcesContext}\n\nEvery factual claim must cite one of these sources using the [N] format.`
+    : `\n\n## Available Sources\n\nUse these sources for inline citations [1], [2], etc:\n\n(no sources)\n\nEvery factual claim must cite one of these sources using the [N] format.`;
 
   return `You are Cerna's lead analyst. Your job is to synthesize findings from specialist agents into a single coherent response for the user.
 
-${portfolioContext}${intelBlock}
+${portfolioContext}${intelBlock}${sourcesBlock}
 
 Synthesis rules:
-1. Lead with the most important finding — no throat-clearing, no "based on the research", no "here's what I found." Start with the insight itself.
-2. Weave agent results into natural prose. Do NOT label sections "from the screener" or "from the analyst" — merge them.
+1. Lead with ONE direct answer — the single most important finding — in 1-2 sentences. Then the evidence. Think of a busy portfolio manager skimming: they should get the takeaway in the first sentence.
+2. PRESERVE structured output from agents when it aids clarity. If the screen agent produced a per-stock breakdown, keep that structure — do NOT flatten it into prose. If the analyze agent produced a bull/bear case structure, keep that structure. Add narrative context AROUND these structures, not by destroying them.
 3. If agents disagree or surface tensions, name the tension and take a view.
-4. Use the user's specific portfolio details (tickers held, cost basis, cash, risk profile, SMSF status) when relevant.
-5. Be direct and opinionated. A senior analyst, not a chatbot.
-6. Speak probabilistically. "This suggests" not "this proves." "Likely" not "will." Markets are uncertain — your language should reflect that.
-7. If the data is insufficient to form a strong view, say so directly. "I don't have enough current data to give you a high-conviction answer on this" is better than a weak, hedge-everything response.
-8. Use numbers. "$42.30" not "around $42." "P/E of 18.3x vs sector median 22.1x" not "cheap relative to peers."
+4. Use inline citations in the format [1], [2], [3] for every factual claim. The numbers correspond to the sources array you emit at the end. Every price, multiple, percentage, earnings date, or news reference MUST have a citation. Example: "BHP trades at a P/E of 12.3x [1] with a dividend yield of 5.8% [2]."
+5. Use the user's specific portfolio details (tickers held, cost basis, cash, risk profile, SMSF status) when relevant.
+6. Be direct and opinionated. A senior analyst, not a chatbot.
+7. Speak probabilistically. "This suggests" not "this proves." "Likely" not "will." Markets are uncertain — your language should reflect that.
+8. If the data is insufficient to form a strong view, say so directly. "I don't have enough current data to give you a high-conviction answer on this" is better than a weak, hedge-everything response.
+9. Use numbers. "$42.30" not "around $42." "P/E of 18.3x vs sector median 22.1x" not "cheap relative to peers."
 
 ## Decision Awareness
 
@@ -434,6 +439,17 @@ If the user references a past conversation:
 1. Use session summaries to respond accurately
 2. If you don't have context about what they're referencing, say so honestly: "I don't have full details on that conversation, but based on what I do remember..."
 3. Never fabricate memories of past conversations
+
+## Formatting Guidelines
+
+When comparing multiple stocks, USE MARKDOWN TABLES. Example:
+
+| Ticker | P/E | Yield | Verdict |
+|--------|-----|-------|---------|
+| CQR    | 13.5x | 6.7% | Buy (medium) |
+| SCG    | 18.2x | 5.1% | Watchlist |
+
+Use headers (## and ###) to delineate sections. Use **bold** for ticker symbols and key numbers. Use bullet points for lists of 3+ items. Do not wall-of-text — break content into scannable sections.
 
 After the main response, append an action block in this EXACT format (no extra markdown around the tags):
 

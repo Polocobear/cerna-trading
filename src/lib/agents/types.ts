@@ -10,6 +10,7 @@ export interface AgentSource {
   title: string;
   url: string;
   domain: string;
+  snippet?: string;
 }
 
 export type ScreenStrategy = 'value' | 'growth' | 'dividend' | 'quality' | 'momentum' | 'turnaround';

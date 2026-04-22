@@ -56,6 +56,7 @@ function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
           return c.url;
         }
       })(),
+      snippet: c.snippet,
     })),
   };
 }
@@ -250,9 +251,9 @@ export function AgentChat({
                       </div>
                       <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 snap-x">
                         {m.sources!.map((s, i) => (
-                          <div key={s.url + i} className="snap-start">
+                          <div key={s.url + i} id={`citation-${i + 1}`} className="snap-start scroll-mt-4">
                             <CitationCard
-                              citation={{ url: s.url, title: s.title, domain: s.domain }}
+                              citation={{ url: s.url, title: s.title, domain: s.domain, snippet: s.snippet }}
                               index={i}
                             />
                           </div>

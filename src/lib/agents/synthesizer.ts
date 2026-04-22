@@ -80,9 +80,10 @@ export async function* synthesize(
   agentResults: AgentResult[],
   portfolioContext: string,
   intelligenceContext?: string,
+  sourcesContext?: string,
   deadlineMs?: number
 ): AsyncGenerator<string, void, unknown> {
-  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext);
+  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext, sourcesContext);
   const { agentBlock, failedAgents } = formatAgentResults(agentResults);
 
   const consolidatedSources = dedupeSources(agentResults);
@@ -106,7 +107,7 @@ export async function* synthesize(
     systemPrompt,
     userMessage,
     temperature: 0.6,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 8192,
     requestTimeoutMs: remaining,
     retryOptions: {
       maxRetries: 1,
@@ -175,8 +176,8 @@ export async function* synthesize(
 
 export function dedupeSources(
   results: AgentResult[]
-): Array<{ title: string; url: string; domain: string }> {
-  const seen = new Map<string, { title: string; url: string; domain: string }>();
+): Array<{ title: string; url: string; domain: string; snippet?: string }> {
+  const seen = new Map<string, { title: string; url: string; domain: string; snippet?: string }>();
   for (const r of results) {
     for (const s of r.sources) {
       if (!s.url) continue;

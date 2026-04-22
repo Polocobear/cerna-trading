@@ -25,8 +25,16 @@ export interface GeminiGroundingChunk {
   };
 }
 
+export interface GeminiGroundingSupport {
+  segment?: {
+    text?: string;
+  };
+  groundingChunkIndices?: number[];
+}
+
 export interface GeminiGroundingMetadata {
   groundingChunks?: GeminiGroundingChunk[];
+  groundingSupports?: GeminiGroundingSupport[];
   webSearchQueries?: string[];
 }
 
@@ -391,13 +399,21 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
     }
   }
   const grounding = candidate?.groundingMetadata;
-  const sources = (grounding?.groundingChunks ?? [])
-    .filter((c) => c.web?.uri)
-    .map((c) => ({
-      title: c.web?.title ?? '',
-      url: c.web?.uri ?? '',
-      domain: domainOf(c.web?.uri ?? ''),
-    }));
+  const chunks = grounding?.groundingChunks ?? [];
+  const supports = grounding?.groundingSupports ?? [];
+
+  const sources = chunks
+    .map((c, i) => {
+      if (!c.web?.uri) return null;
+      const support = supports.find(s => s.groundingChunkIndices?.includes(i));
+      return {
+        title: c.web?.title ?? '',
+        url: c.web?.uri ?? '',
+        domain: domainOf(c.web?.uri ?? ''),
+        snippet: support?.segment?.text ? support.segment.text.slice(0, 150) : undefined,
+      };
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
   return { text, functionCalls, sources, raw: json };
 }
 
