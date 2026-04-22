@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { GEMINI_FLASH, GEMINI_PRO } from '@/lib/gemini/client';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -13,16 +14,20 @@ export async function GET() {
     key_prefix: key?.slice(0, 6) ?? 'MISSING',
   };
 
-  // Test 1: Gemini Flash without search grounding
+  // Test 1: Gemini 3 Flash without search grounding
   try {
     const start = Date.now();
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FLASH}:generateContent?key=${key}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'Say hello in one word' }] }],
+          generationConfig: {
+            temperature: 1.0,
+            thinkingConfig: { thinkingLevel: 'low' },
+          },
         }),
       }
     );
@@ -40,17 +45,21 @@ export async function GET() {
     results.flash_plain = { error: err instanceof Error ? err.message : String(err) };
   }
 
-  // Test 2: Gemini Flash WITH search grounding (this is what the agents use)
+  // Test 2: Gemini 3 Flash WITH search grounding
   try {
     const start = Date.now();
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_FLASH}:generateContent?key=${key}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'What are the top ASX stocks today?' }] }],
           tools: [{ google_search: {} }],
+          generationConfig: {
+            temperature: 1.0,
+            thinkingConfig: { thinkingLevel: 'low' },
+          },
         }),
       }
     );
@@ -69,17 +78,21 @@ export async function GET() {
     results.flash_grounded = { error: err instanceof Error ? err.message : String(err) };
   }
 
-  // Test 3: Gemini Pro WITH search grounding (this is what deep research agents use)
+  // Test 3: Gemini 3.1 Pro WITH search grounding
   try {
     const start = Date.now();
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_PRO}:generateContent?key=${key}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: 'What are the top ASX stocks today?' }] }],
           tools: [{ google_search: {} }],
+          generationConfig: {
+            temperature: 1.0,
+            thinkingConfig: { thinkingLevel: 'medium' },
+          },
         }),
       }
     );

@@ -1,6 +1,6 @@
 import {
   callGeminiV2,
-  sanitizeGeminiError,
+  GEMINI_FLASH,
   type GeminiFunctionDeclaration,
   type GeminiV2NonStreamResult,
 } from '@/lib/gemini/client';
@@ -541,11 +541,12 @@ export async function runOrchestrator(
   let result: GeminiV2NonStreamResult;
   try {
     result = await callGeminiV2({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_FLASH,
       systemPrompt: buildOrchestratorSystemPrompt(context.exchangeCtx),
       messages,
       tools: TOOL_DECLARATIONS,
-      temperature: 0.2,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 2048,
       requestTimeoutMs: 15000,
       retryOptions: {

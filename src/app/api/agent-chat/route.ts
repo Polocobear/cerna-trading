@@ -439,7 +439,7 @@ export async function POST(req: Request) {
         }
 
         // (j) done
-        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== 'gemini-2.5-flash')
+        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== 'gemini-3-flash-preview')
           ? 'mixed'
           : 'flash';
         emit({

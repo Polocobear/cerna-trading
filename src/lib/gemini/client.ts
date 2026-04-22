@@ -1,13 +1,15 @@
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 12000;
 const DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS = 10000;
+export const GEMINI_PRO = 'gemini-3.1-pro-preview' as const;
+export const GEMINI_FLASH = 'gemini-3-flash-preview' as const;
 
 // Tiered model routing (legacy callGemini):
 // STANDARD: Gemini 2.5 Pro — free tier (1,500 RPD), strong reasoning
 // DEEP:     Gemini 3.1 Pro — paid frontier reasoning for deep analysis
 const MODELS = {
-  standard: 'gemini-2.5-pro',
-  deep: 'gemini-2.5-pro',
+  standard: GEMINI_FLASH,
+  deep: GEMINI_PRO,
 } as const;
 
 export type ModelTier = keyof typeof MODELS;
@@ -61,7 +63,10 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
     contents,
     tools: [{ googleSearch: {} }],
     generationConfig: {
-      temperature: tier === 'deep' ? 0.4 : 0.7,
+      temperature: 1.0,
+      thinkingConfig: {
+        thinkingLevel: tier === 'deep' ? 'medium' : 'low',
+      },
       maxOutputTokens: tier === 'deep' ? 8192 : 4096,
     },
   };
@@ -86,7 +91,8 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
 // v2 API used by the Phase 7B agent backend.
 // =============================================================================
 
-export type GeminiV2Model = 'gemini-2.5-pro' | 'gemini-2.5-flash';
+export type GeminiV2Model = typeof GEMINI_PRO | typeof GEMINI_FLASH;
+export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
 export interface GeminiSchema {
   type: 'OBJECT' | 'STRING' | 'NUMBER' | 'INTEGER' | 'BOOLEAN' | 'ARRAY';
@@ -119,6 +125,7 @@ export interface GeminiV2Options {
   responseSchema?: GeminiSchema;
   responseMimeType?: 'application/json' | 'text/plain';
   temperature?: number;
+  thinking_level?: GeminiThinkingLevel;
   maxOutputTokens?: number;
   requestTimeoutMs?: number;
   retryOptions?: {
@@ -293,9 +300,12 @@ function buildV2Body(opts: GeminiV2Options): Record<string, unknown> {
   }
 
   const generationConfig: Record<string, unknown> = {
-    temperature: opts.temperature ?? 0.6,
+    temperature: opts.temperature ?? 1.0,
     maxOutputTokens: opts.maxOutputTokens,
   };
+  if (opts.thinking_level) {
+    generationConfig.thinkingConfig = { thinkingLevel: opts.thinking_level };
+  }
   if (opts.responseMimeType) {
     generationConfig.responseMimeType = opts.responseMimeType;
   }

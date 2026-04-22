@@ -1,4 +1,4 @@
-import { callGeminiV2 } from '@/lib/gemini/client';
+import { callGeminiV2, GEMINI_FLASH } from '@/lib/gemini/client';
 import { buildFollowUpsPrompt } from './prompts';
 
 const SCHEMA = {
@@ -16,10 +16,11 @@ export async function generateFollowUps(
 
   try {
     const res = await callGeminiV2({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_FLASH,
       systemPrompt: buildFollowUpsPrompt(),
       userMessage,
-      temperature: 0.7,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 256,
       responseMimeType: 'application/json',
       responseSchema: SCHEMA,
