@@ -71,16 +71,11 @@ export function ChatInput({
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key !== 'Enter') return;
-    if (isTouch) {
-      if (e.shiftKey) return;
-      e.preventDefault();
-      submit();
-    } else {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        submit();
-      }
-    }
+    if (e.shiftKey) return;
+    if (e.nativeEvent.isComposing) return;
+    if (isTouch && (e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    submit();
   }
 
   const canSend = value.trim().length > 0 && !disabled;

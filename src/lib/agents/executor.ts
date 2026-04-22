@@ -311,7 +311,8 @@ async function runResearchAgent(
   tool: ToolCall,
   portfolioContext: string,
   exchange: ExchangeContext,
-  isDeepAvailable: boolean
+  isDeepAvailable: boolean,
+  deadlineMs?: number
 ): Promise<AgentResult> {
   const agent = classify(tool.name);
   const description = describeToolCall(tool.name, tool.arguments);
@@ -323,6 +324,7 @@ async function runResearchAgent(
   const enableSearch = isResearch;
 
   const start = Date.now();
+  const deadline = deadlineMs ?? Date.now() + 55000;
 
   const tryCall = async (model: GeminiV2Model) => {
     return callGeminiV2({
@@ -332,16 +334,20 @@ async function runResearchAgent(
       enableSearchGrounding: enableSearch,
       temperature: 0.55,
       maxOutputTokens: 3072,
-      requestTimeoutMs: enableSearch ? 12000 : 8000,
+      requestTimeoutMs: enableSearch ? 25000 : 12000,
       retryOptions: {
-        maxRetries: 1,
+        maxRetries: enableSearch ? 0 : 1,
         backoffMs: 1000,
+        deadlineMs: deadline,
       },
     });
   };
 
   let usedModel: GeminiV2Model = primary;
   try {
+    if (Date.now() > deadline - 5000) {
+      throw new Error('Pipeline deadline approached before execution');
+    }
     const res = await tryCall(primary);
     return {
       agent,
@@ -356,6 +362,9 @@ async function runResearchAgent(
     const status = (err as Error & { status?: number }).status;
     if (isRetryableGeminiStatus(status) && primary === 'gemini-2.5-pro') {
       try {
+        if (Date.now() > deadline - 5000) {
+          throw new Error('Pipeline deadline approached before downgrade attempt');
+        }
         await waitWithJitter(1000);
         usedModel = 'gemini-2.5-flash';
         const res = await tryCall('gemini-2.5-flash');
@@ -409,6 +418,7 @@ export interface ExecuteAgentsContext {
   supabase: SupabaseClient;
   userId: string;
   userMessage: string;
+  deadlineMs?: number;
 }
 
 export async function executeAgents(
@@ -435,7 +445,8 @@ export async function executeAgents(
         tool,
         ctx.portfolioContext,
         ctx.exchange,
-        ctx.isDeepAvailable
+        ctx.isDeepAvailable,
+        ctx.deadlineMs
       );
     }
 

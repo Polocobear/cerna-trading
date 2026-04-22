@@ -74,7 +74,8 @@ export async function* synthesize(
   userQuery: string,
   agentResults: AgentResult[],
   portfolioContext: string,
-  intelligenceContext?: string
+  intelligenceContext?: string,
+  deadlineMs?: number
 ): AsyncGenerator<string, void, unknown> {
   const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext);
   const agentBlock = formatAgentResults(agentResults);
@@ -89,16 +90,19 @@ export async function* synthesize(
 
   const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
 
+  const remaining = Math.max(5000, Math.min(15000, (deadlineMs ?? Date.now() + 15000) - Date.now()));
+
   const res = await callGeminiV2Stream({
     model: 'gemini-2.5-flash',
     systemPrompt,
     userMessage,
     temperature: 0.6,
     maxOutputTokens: 4096,
-    requestTimeoutMs: SYNTHESIS_CONNECT_TIMEOUT_MS,
+    requestTimeoutMs: remaining,
     retryOptions: {
       maxRetries: 1,
       backoffMs: 1000,
+      deadlineMs: deadlineMs,
     },
   });
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutDashboard, MessageSquare, Wallet, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LayoutDashboard, MessageSquare, Wallet, Plus } from 'lucide-react';
 import type { ViewId } from './AppShell';
 import { SidebarHistory, type SessionSummary } from './SidebarHistory';
 import { SidebarPortfolio } from './SidebarPortfolio';
@@ -18,6 +18,8 @@ interface SidebarProps {
   positions: Position[];
   cashAvailable: number;
   variant?: 'desktop' | 'mobile';
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 interface NavItem {
@@ -41,15 +43,17 @@ export function Sidebar({
   positions,
   cashAvailable,
   variant = 'desktop',
+  collapsed = false,
+  onToggleCollapse,
 }: SidebarProps) {
   const isMobile = variant === 'mobile';
   const { unreadCount } = useAlerts();
 
-  // Desktop: hidden below 768px, collapsed 64px at 768-1023px, full 280px at 1024px+
-  // Mobile variant (inside drawer): always full width
+  const isCollapsed = !isMobile && collapsed;
+
   const asideClass = isMobile
     ? 'flex flex-col h-full w-[280px] shrink-0'
-    : 'hidden md:flex flex-col h-full shrink-0 sidebar-responsive group';
+    : 'hidden md:flex flex-col h-full shrink-0 transition-[width] duration-200 ease-out';
 
   return (
     <aside
@@ -57,36 +61,75 @@ export function Sidebar({
       style={{
         background: 'var(--sidebar-bg)',
         borderColor: 'var(--sidebar-border)',
+        width: isMobile
+          ? '280px'
+          : isCollapsed
+          ? 'var(--sidebar-collapsed)'
+          : 'var(--sidebar-width)',
       }}
     >
       {/* Header */}
       <div
-        className="flex items-center gap-2 h-12 px-4 shrink-0 border-b"
+        className={cn(
+          'relative flex items-center h-12 shrink-0 border-b',
+          isCollapsed ? 'justify-center px-2' : 'gap-2 px-4'
+        )}
         style={{ borderColor: 'rgba(255,255,255,0.06)' }}
       >
         <div className="w-8 h-8 rounded-lg bg-cerna-primary flex items-center justify-center text-white font-bold shrink-0">
           C
         </div>
-        <span className="font-semibold tracking-tight text-cerna-text-primary whitespace-nowrap sidebar-label">
-          Cerna Trading
-        </span>
+        {!isCollapsed && (
+          <>
+            <span className="font-semibold tracking-tight text-cerna-text-primary whitespace-nowrap">
+              Cerna Trading
+            </span>
+            {!isMobile && onToggleCollapse && (
+              <button
+                onClick={onToggleCollapse}
+                className="ml-auto h-8 w-8 rounded-lg text-[rgba(255,255,255,0.45)] hover:text-cerna-text-primary hover:bg-[rgba(255,255,255,0.05)] transition-smooth flex items-center justify-center"
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              >
+                <ChevronLeft size={16} />
+              </button>
+            )}
+          </>
+        )}
+        {isCollapsed && onToggleCollapse && (
+          <button
+            onClick={onToggleCollapse}
+            className="absolute top-2 right-2 h-8 w-8 rounded-lg text-[rgba(255,255,255,0.45)] hover:text-cerna-text-primary hover:bg-[rgba(255,255,255,0.05)] transition-smooth flex items-center justify-center"
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+          >
+            <ChevronRight size={16} />
+          </button>
+        )}
       </div>
 
       {/* New chat button */}
-      <div className="px-3 pt-3 pb-2 shrink-0">
+      <div className={cn('pt-3 pb-2 shrink-0', isCollapsed ? 'px-2' : 'px-3')}>
         <button
           onClick={onNewChat}
-          className="w-full flex items-center gap-2 px-3 h-10 rounded-lg bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium text-sm transition-smooth glow-primary-hover"
+          className={cn(
+            'w-full flex items-center h-10 rounded-lg bg-cerna-primary hover:bg-cerna-primary-hover text-white font-medium text-sm transition-smooth glow-primary-hover',
+            isCollapsed ? 'justify-center px-0' : 'gap-2 px-3'
+          )}
           style={{ minHeight: 40 }}
+          title="New chat"
         >
           <Plus size={16} className="shrink-0" />
-          <span className="whitespace-nowrap sidebar-label">New chat</span>
+          {!isCollapsed && <span className="whitespace-nowrap">New chat</span>}
         </button>
       </div>
 
       {/* Nav */}
       <nav
-        className="px-2 py-2 space-y-0.5 shrink-0 border-b"
+        className={cn(
+          'py-2 space-y-0.5 shrink-0 border-b',
+          isCollapsed ? 'px-2' : 'px-2'
+        )}
         style={{ borderColor: 'rgba(255,255,255,0.06)' }}
       >
         {NAV_ITEMS.map(({ id, label, Icon }) => {
@@ -96,7 +139,8 @@ export function Sidebar({
               key={id}
               onClick={() => onSelectView(id)}
               className={cn(
-                'group/item relative w-full flex items-center gap-3 px-3 h-10 rounded-lg transition-smooth text-sm',
+                'group/item relative w-full flex items-center h-10 rounded-lg transition-smooth text-sm',
+                isCollapsed ? 'justify-center px-0' : 'gap-3 px-3',
                 isActive
                   ? 'text-white'
                   : 'text-[rgba(255,255,255,0.5)] hover:text-[rgba(255,255,255,0.8)] hover:bg-[rgba(255,255,255,0.04)]'
@@ -111,29 +155,29 @@ export function Sidebar({
                 />
               )}
               <Icon size={18} strokeWidth={1.75} className="shrink-0" />
-              <span className="whitespace-nowrap sidebar-label">{label}</span>
-              {id === 'chat' && (
-                <span className="sidebar-label">
-                  <AlertBadge count={unreadCount} />
-                </span>
-              )}
+              {!isCollapsed && <span className="whitespace-nowrap">{label}</span>}
+              {!isCollapsed && id === 'chat' && <AlertBadge count={unreadCount} />}
             </button>
           );
         })}
       </nav>
 
       {/* History */}
-      <div className="flex-1 overflow-hidden sidebar-label min-h-0">
-        <SidebarHistory
-          activeSessionId={activeSessionId}
-          onSelectSession={onSelectSession}
-        />
-      </div>
+      {!isCollapsed && (
+        <div className="flex-1 overflow-hidden min-h-0">
+          <SidebarHistory
+            activeSessionId={activeSessionId}
+            onSelectSession={onSelectSession}
+          />
+        </div>
+      )}
 
       {/* Portfolio summary */}
-      <div className="sidebar-label shrink-0">
-        <SidebarPortfolio positions={positions} cashAvailable={cashAvailable} />
-      </div>
+      {!isCollapsed && (
+        <div className="shrink-0">
+          <SidebarPortfolio positions={positions} cashAvailable={cashAvailable} />
+        </div>
+      )}
     </aside>
   );
 }

@@ -116,6 +116,8 @@ export interface GeminiV2Options {
   retryOptions?: {
     maxRetries?: number;
     backoffMs?: number;
+    downgradeModel?: string;
+    deadlineMs?: number;
   };
 }
 
@@ -205,13 +207,18 @@ export async function callWithRetry(
     maxRetries?: number;
     backoffMs?: number;
     downgradeModel?: string;
+    deadlineMs?: number;
   }
 ): Promise<Response> {
   const maxRetries = options?.maxRetries ?? 2;
   const backoffMs = options?.backoffMs ?? 2000;
+  const deadline = options?.deadlineMs;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    if (deadline && Date.now() > deadline - 3000) {
+      return fn();
+    }
     try {
       const res = await fn();
 

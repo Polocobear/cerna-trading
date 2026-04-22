@@ -410,7 +410,7 @@ export async function POST(req: Request) {
         }
 
         try {
-          const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full);
+          const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full, pipelineDeadline);
           for await (const chunk of synthStream) {
             fullResponse += chunk;
             emit({ type: 'stream', content: chunk });
@@ -517,6 +517,10 @@ export async function POST(req: Request) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+    },
+  });
+}
+alive',
     },
   });
 }

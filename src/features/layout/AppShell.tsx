@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { LogOut, Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
@@ -30,6 +30,7 @@ export function AppShell(props: AppShellProps) {
   const router = useRouter();
   const [view, setView] = useState<ViewId>(props.initialView ?? 'dashboard');
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [positions, setPositions] = useState<Position[]>(props.initialPositions);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>(props.initialWatchlist);
   const [journal] = useState<JournalEntry[]>(props.initialJournal);
@@ -88,6 +89,21 @@ export function AppShell(props: AppShellProps) {
     setView('portfolio');
     setMobileDrawerOpen(false);
   }, []);
+
+  const toggleSidebarCollapse = useCallback(() => {
+    setSidebarCollapsed((prev) => !prev);
+  }, []);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem('cerna-sidebar-collapsed');
+    if (saved === 'true') {
+      setSidebarCollapsed(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem('cerna-sidebar-collapsed', sidebarCollapsed ? 'true' : 'false');
+  }, [sidebarCollapsed]);
 
   async function signOut() {
     const supabase = createClient();
@@ -171,6 +187,8 @@ export function AppShell(props: AppShellProps) {
         activeSessionId={activeSessionId}
         positions={positions}
         cashAvailable={props.initialProfile?.cash_available ?? 0}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebarCollapse}
       />
 
       <MobileDrawer open={mobileDrawerOpen} onClose={() => setMobileDrawerOpen(false)}>
