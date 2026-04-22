@@ -18,7 +18,9 @@ import type {
   AgentResult,
   ToolCall,
   TradeAction,
+  AgentSource,
 } from './types';
+import type { AgentContext } from '@/lib/memory/context-builder';
 
 function classify(toolName: string): AgentName {
   switch (toolName) {
@@ -97,7 +99,6 @@ interface ExistingPositionRow {
 }
 
 function inferExchangeFromTicker(ticker: string, fallback: string): string {
-  // 3-letter all-caps is typical of ASX; otherwise default to the user's primary exchange or ASX
   if (/^[A-Z]{3}$/.test(ticker)) return fallback || 'ASX';
   return fallback || 'ASX';
 }
@@ -124,16 +125,7 @@ function inferCurrencyFromExchange(exchange: string): string {
   }
 }
 
-function isRetryableGeminiStatus(status?: number): status is number {
-  return status === 429 || status === 503 || (typeof status === 'number' && status >= 500);
-}
-
-function waitWithJitter(baseMs: number): Promise<void> {
-  const jitter = Math.random() * 500;
-  return new Promise((resolve) => setTimeout(resolve, baseMs + jitter));
-}
-
-function safeAgentError(err: unknown): string {
+export function safeAgentError(err: unknown): string {
   if (err instanceof Error) {
     const geminiError = err as Error & { status?: number; rawText?: string };
     if (typeof geminiError.status === 'number') {
@@ -160,10 +152,7 @@ async function handleLogTrade(
   userId: string,
   rawMessage: string,
   exchange: ExchangeContext
-): Promise<AgentResult> {
-  const start = Date.now();
-  const description = describeToolCall('log_trade', args);
-
+): Promise<{ success: boolean; content: string | null; sources: AgentSource[]; error?: string }> {
   const ticker = String(args.ticker ?? '').toUpperCase().trim();
   const actionRaw = String(args.action ?? '').toLowerCase();
   const shares = typeof args.shares === 'number' ? args.shares : parseFloat(String(args.shares ?? ''));
@@ -176,14 +165,10 @@ async function handleLogTrade(
 
   if (!ticker || !action || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(price) || price <= 0) {
     return {
-      agent: 'trade_log',
-      description,
-      status: 'error',
-      data: "I couldn't parse that trade clearly — could you confirm the ticker, buy/sell, number of shares, and price?",
+      success: false,
+      content: null,
       sources: [],
-      executionTime: Date.now() - start,
-      model: 'gemini-2.5-flash',
-      error: 'invalid log_trade arguments',
+      error: "I couldn't parse that trade clearly — could you confirm the ticker, buy/sell, number of shares, and price?",
     };
   }
 
@@ -193,7 +178,6 @@ async function handleLogTrade(
   const currency =
     (typeof args.currency === 'string' && args.currency) || inferCurrencyFromExchange(exchangeStr);
 
-  // Insert logged_trade
   const { error: logErr } = await supabase.from('logged_trades').insert({
     user_id: userId,
     ticker,
@@ -210,18 +194,13 @@ async function handleLogTrade(
 
   if (logErr) {
     return {
-      agent: 'trade_log',
-      description,
-      status: 'error',
-      data: `I tried to log the trade but the database rejected it: ${logErr.message}`,
+      success: false,
+      content: null,
       sources: [],
-      executionTime: Date.now() - start,
-      model: 'gemini-2.5-flash',
-      error: logErr.message,
+      error: `I tried to log the trade but the database rejected it: ${logErr.message}`,
     };
   }
 
-  // Update positions
   const { data: existingRaw } = await supabase
     .from('positions')
     .select('id, shares, cost_basis, exchange, currency')
@@ -263,7 +242,6 @@ async function handleLogTrade(
       confirmation = `Got it. Logged: Bought ${shares} ${ticker} at ${formatMoney(price, currency)}. New position opened.`;
     }
   } else {
-    // sell or trim
     if (!existing) {
       confirmation = `I logged the ${action} of ${shares} ${ticker} at ${formatMoney(price, currency)}, but I don't have a matching open position on file — you may want to double-check your records.`;
     } else {
@@ -297,40 +275,51 @@ async function handleLogTrade(
   });
 
   return {
-    agent: 'trade_log',
-    description,
-    status: 'success',
-    data: confirmation,
+    success: true,
+    content: confirmation,
     sources: [],
-    executionTime: Date.now() - start,
-    model: 'gemini-2.5-flash',
   };
 }
 
-async function runResearchAgent(
-  tool: ToolCall,
-  portfolioContext: string,
-  exchange: ExchangeContext,
-  isDeepAvailable: boolean,
-  deadlineMs?: number
-): Promise<AgentResult> {
-  const agent = classify(tool.name);
-  const description = describeToolCall(tool.name, tool.arguments);
-  const userMessage = argsToUserMessage(tool.name, tool.arguments);
-  const systemPrompt = systemPromptFor(agent, portfolioContext, exchange);
+export async function runAgent(options: {
+  name: string;
+  args: Record<string, unknown>;
+  context: AgentContext;
+  deep: boolean;
+  deadlineMs: number;
+  supabase?: SupabaseClient;
+  userId?: string;
+  userMessage?: string;
+}): Promise<{
+  name: string;
+  success: boolean;
+  content: string | null;
+  sources: AgentSource[];
+  error?: string;
+}> {
+  const { name, args, context, deep, deadlineMs, supabase, userId, userMessage } = options;
+  const agent = classify(name);
+
+  if (name === 'log_trade') {
+    if (!supabase || !userId || !userMessage) {
+      return { name, success: false, content: null, sources: [], error: 'Missing log_trade dependencies' };
+    }
+    const logRes = await handleLogTrade(args, supabase, userId, userMessage, context.exchangeCtx);
+    return { name, ...logRes };
+  }
+
+  const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
+  const promptUserMessage = argsToUserMessage(name, args);
 
   const isResearch = agent !== 'portfolio';
-  const primary: GeminiV2Model = isResearch && isDeepAvailable ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+  const primary: GeminiV2Model = isResearch && deep ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
   const enableSearch = isResearch;
-
-  const start = Date.now();
-  const deadline = deadlineMs ?? Date.now() + 55000;
 
   const tryCall = async (model: GeminiV2Model) => {
     return callGeminiV2({
       model,
       systemPrompt,
-      userMessage,
+      userMessage: promptUserMessage,
       enableSearchGrounding: enableSearch,
       temperature: 0.55,
       maxOutputTokens: model === 'gemini-2.5-pro' ? 32768 : 8192,
@@ -338,70 +327,50 @@ async function runResearchAgent(
       retryOptions: {
         maxRetries: enableSearch ? 0 : 1,
         backoffMs: 1000,
-        deadlineMs: deadline,
+        deadlineMs,
       },
     });
   };
 
-  let usedModel: GeminiV2Model = primary;
   try {
-    if (Date.now() > deadline - 5000) {
+    if (Date.now() > deadlineMs - 5000) {
       throw new Error('Pipeline deadline approached before execution');
     }
     const res = await tryCall(primary);
     return {
-      agent,
-      description,
-      status: 'success',
-      data: res.text,
+      name,
+      success: true,
+      content: res.text,
       sources: res.sources,
-      executionTime: Date.now() - start,
-      model: usedModel,
     };
   } catch (err) {
-    if (primary === 'gemini-2.5-pro' && Date.now() <= deadline - 10000) {
+    if (primary === 'gemini-2.5-pro' && Date.now() <= deadlineMs - 10000) {
       try {
-        usedModel = 'gemini-2.5-flash';
         const res = await tryCall('gemini-2.5-flash');
         return {
-          agent,
-          description,
-          status: 'success',
-          data: res.text,
+          name,
+          success: true,
+          content: res.text,
           sources: res.sources,
-          executionTime: Date.now() - start,
-          model: usedModel,
         };
       } catch (fallbackErr) {
         return {
-          agent,
-          description,
-          status: 'error',
-          data: '',
+          name,
+          success: false,
+          content: null,
           sources: [],
-          executionTime: Date.now() - start,
-          model: usedModel,
           error: safeAgentError(fallbackErr),
         };
       }
     }
     return {
-      agent,
-      description,
-      status: 'error',
-      data: '',
+      name,
+      success: false,
+      content: null,
       sources: [],
-      executionTime: Date.now() - start,
-      model: usedModel,
       error: safeAgentError(err),
     };
   }
-}
-
-function summarize(data: string): string {
-  const trimmed = data.trim().replace(/\s+/g, ' ');
-  if (!trimmed) return 'completed';
-  return trimmed.slice(0, 140) + (trimmed.length > 140 ? '…' : '');
 }
 
 export interface ExecuteAgentsContext {
@@ -424,31 +393,46 @@ export async function executeAgents(
     const description = describeToolCall(tool.name, tool.arguments);
     onEvent({ type: 'agent_start', agent, description });
 
-    let result: AgentResult;
-    if (tool.name === 'log_trade') {
-      result = await handleLogTrade(
-        tool.arguments,
-        ctx.supabase,
-        ctx.userId,
-        ctx.userMessage,
-        ctx.exchange
-      );
-    } else {
-      result = await runResearchAgent(
-        tool,
-        ctx.portfolioContext,
-        ctx.exchange,
-        ctx.isDeepAvailable,
-        ctx.deadlineMs
-      );
-    }
+    const context: AgentContext = {
+      profile: null,
+      positions: [],
+      watchlist: [],
+      exchangeCtx: ctx.exchange,
+      portfolioContext: ctx.portfolioContext,
+      intelligenceContext: ''
+    };
 
-    if (result.status === 'success') {
-      onEvent({ type: 'agent_complete', agent, summary: summarize(result.data), sources: result.sources });
+    const start = Date.now();
+    const result = await runAgent({
+      name: tool.name,
+      args: tool.arguments,
+      context,
+      deep: ctx.isDeepAvailable,
+      deadlineMs: ctx.deadlineMs ?? Date.now() + 55000,
+      supabase: ctx.supabase,
+      userId: ctx.userId,
+      userMessage: ctx.userMessage,
+    });
+
+    const agentResult: AgentResult = {
+      agent,
+      description,
+      status: result.success ? 'success' : 'error',
+      data: result.content ?? '',
+      sources: result.sources,
+      executionTime: Date.now() - start,
+      model: 'gemini-2.5-flash',
+      error: result.error,
+    };
+
+    if (agentResult.status === 'success') {
+      const trimmed = agentResult.data.trim().replace(/\s+/g, ' ');
+      const summary = !trimmed ? 'completed' : trimmed.slice(0, 140) + (trimmed.length > 140 ? '…' : '');
+      onEvent({ type: 'agent_complete', agent, summary, sources: agentResult.sources });
     } else {
-      onEvent({ type: 'agent_error', agent, error: result.error ?? 'unknown error' });
+      onEvent({ type: 'agent_error', agent, error: agentResult.error ?? 'unknown error' });
     }
-    return result;
+    return agentResult;
   });
 
   const settled = await Promise.allSettled(promises);
@@ -460,7 +444,6 @@ export async function executeAgents(
     } else {
       const tool = toolCalls[i];
       const agent = classify(tool.name);
-      const msg = safeAgentError(s.reason);
       results.push({
         agent,
         description: describeToolCall(tool.name, tool.arguments),
@@ -469,7 +452,7 @@ export async function executeAgents(
         sources: [],
         executionTime: 0,
         model: 'gemini-2.5-flash',
-        error: msg,
+        error: safeAgentError(s.reason),
       });
     }
   }

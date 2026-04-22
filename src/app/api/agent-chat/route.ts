@@ -269,10 +269,9 @@ export async function POST(req: Request) {
         // (a) orchestrate
         let plan: Awaited<ReturnType<typeof runOrchestrator>>;
         try {
-          plan = await runOrchestrator({
-            userMessage: message,
+          plan = await runOrchestrator(message, {
             history: history.slice(-10),
-            exchange: exchangeCtx,
+            exchangeCtx: exchangeCtx,
           });
         } finally {
           console.error(`[agent-chat] ORCHESTRATOR complete: ${Date.now() - pipelineStart}ms`);
@@ -280,10 +279,10 @@ export async function POST(req: Request) {
         console.error(`[agent-chat] ROUTING:`, JSON.stringify(plan.toolCalls));
 
         // direct response path
-        if (plan.directResponse && plan.toolCalls.length === 0) {
+        if (plan.directReply && plan.toolCalls.length === 0) {
           emit({ type: 'plan', agents: [] });
-          emit({ type: 'stream', content: plan.directResponse });
-          fullResponse = plan.directResponse;
+          emit({ type: 'stream', content: plan.directReply });
+          fullResponse = plan.directReply;
 
           // persist assistant message
           await supabase.from('chat_messages').insert({
