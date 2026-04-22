@@ -332,6 +332,11 @@ async function runResearchAgent(
       enableSearchGrounding: enableSearch,
       temperature: 0.55,
       maxOutputTokens: 3072,
+      requestTimeoutMs: enableSearch ? 12000 : 8000,
+      retryOptions: {
+        maxRetries: 1,
+        backoffMs: 1000,
+      },
     });
   };
 
@@ -349,10 +354,11 @@ async function runResearchAgent(
     };
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
-    if (isRetryableGeminiStatus(status)) {
-      await waitWithJitter(2000);
+    if (isRetryableGeminiStatus(status) && primary === 'gemini-2.5-pro') {
       try {
-        const res = await tryCall(primary);
+        await waitWithJitter(1000);
+        usedModel = 'gemini-2.5-flash';
+        const res = await tryCall('gemini-2.5-flash');
         return {
           agent,
           description,
@@ -362,37 +368,8 @@ async function runResearchAgent(
           executionTime: Date.now() - start,
           model: usedModel,
         };
-      } catch (err2) {
-        const status2 = (err2 as Error & { status?: number }).status;
-        if (isRetryableGeminiStatus(status2) && primary === 'gemini-2.5-pro') {
-          try {
-            await waitWithJitter(2000);
-            usedModel = 'gemini-2.5-flash';
-            const res = await tryCall('gemini-2.5-flash');
-            return {
-              agent,
-              description,
-              status: 'success',
-              data: res.text,
-              sources: res.sources,
-              executionTime: Date.now() - start,
-              model: usedModel,
-            };
-          } catch (err3) {
-            const msg = safeAgentError(err3);
-            return {
-              agent,
-              description,
-              status: 'error',
-              data: '',
-              sources: [],
-              executionTime: Date.now() - start,
-              model: usedModel,
-              error: msg,
-            };
-          }
-        }
-        const msg = safeAgentError(err2);
+      } catch (fallbackErr) {
+        const msg = safeAgentError(fallbackErr);
         return {
           agent,
           description,

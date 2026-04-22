@@ -168,6 +168,11 @@ export async function runOrchestrator(input: OrchestratorInput): Promise<Orchest
       tools: TOOL_DECLARATIONS,
       temperature: 0.2,
       maxOutputTokens: 1024,
+      requestTimeoutMs: 8000,
+      retryOptions: {
+        maxRetries: 1,
+        backoffMs: 1000,
+      },
     });
   } catch (err) {
     const geminiError = err as Error & { status?: number; rawText?: string };

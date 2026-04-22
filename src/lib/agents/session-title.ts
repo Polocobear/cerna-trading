@@ -22,6 +22,11 @@ export async function generateSessionTitle(
       userMessage: body,
       temperature: 0.4,
       maxOutputTokens: 32,
+      requestTimeoutMs: 2000,
+      retryOptions: {
+        maxRetries: 0,
+        backoffMs: 0,
+      },
     });
     return cleanTitle(res.text);
   } catch {

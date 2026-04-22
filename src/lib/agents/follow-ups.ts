@@ -23,6 +23,11 @@ export async function generateFollowUps(
       maxOutputTokens: 256,
       responseMimeType: 'application/json',
       responseSchema: SCHEMA,
+      requestTimeoutMs: 2500,
+      retryOptions: {
+        maxRetries: 0,
+        backoffMs: 0,
+      },
     });
 
     const text = res.text.trim();

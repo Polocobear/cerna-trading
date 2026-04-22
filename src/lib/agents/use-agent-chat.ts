@@ -123,6 +123,8 @@ function waitWithJitter(baseMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, baseMs + jitter));
 }
 
+const CLIENT_STREAM_TIMEOUT_MS = 62000;
+
 export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
   const { sessionId, depth } = options;
 
@@ -216,6 +218,13 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
 
       const assistantId = genId();
       let assistantCreated = false;
+      let assistantHasContent = false;
+      let sawDone = false;
+      let requestTimedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        requestTimedOut = true;
+        controller.abort();
+      }, CLIENT_STREAM_TIMEOUT_MS);
       const ensureAssistant = () => {
         if (assistantCreated) return;
         assistantCreated = true;
@@ -231,9 +240,35 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       };
 
       const appendToAssistant = (chunk: string) => {
+        if (chunk.length > 0) {
+          assistantHasContent = true;
+        }
         ensureAssistant();
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + chunk } : m))
+        );
+      };
+
+      const failIncompleteRun = (fallbackMessage: string) => {
+        setAgentStatuses((prev) =>
+          prev.map((status) =>
+            status.status === 'complete' || status.status === 'error'
+              ? status
+              : { ...status, status: 'error', error: 'Request timed out before completion.' }
+          )
+        );
+        ensureAssistant();
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? {
+                  ...m,
+                  content: assistantHasContent
+                    ? `${m.content.trimEnd()}\n\n${fallbackMessage}`
+                    : fallbackMessage,
+                }
+              : m
+          )
         );
       };
 
@@ -340,6 +375,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
                 break;
               }
               case 'done': {
+                sawDone = true;
                 setDeepRemaining(evt.deepRemaining);
                 setIsStreaming(false);
                 setIsLoading(false);
@@ -369,10 +405,24 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
           }
         }
         // Stream ended without a `done` event.
+        if (!sawDone) {
+          const fallback =
+            'The request took too long and did not complete. Please try again.';
+          failIncompleteRun(fallback);
+          setError(fallback);
+        }
         setIsStreaming(false);
         setIsLoading(false);
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
+          if (requestTimedOut) {
+            const fallback =
+              'The request took too long and did not complete. Please try again.';
+            failIncompleteRun(fallback);
+            setError(fallback);
+            setIsLoading(false);
+            setIsStreaming(false);
+          }
           return;
         }
         const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -387,6 +437,8 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
         setError(safeError);
         setIsLoading(false);
         setIsStreaming(false);
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     },
     [sessionId, depth]
