@@ -19,6 +19,13 @@ export function buildPortfolioContext(
 
   if (profile) {
     lines.push(`- Risk tolerance: ${profile.risk_tolerance ?? 'moderate'}`);
+    if (profile.preferred_exchange) {
+      const exchanges = normalizeExchangeList(profile.preferred_exchange);
+      lines.push(`- Preferred exchange: ${exchanges.join(', ') || profile.preferred_exchange}`);
+    }
+    if (profile.preferred_currency) {
+      lines.push(`- Preferred currency: ${profile.preferred_currency.toUpperCase()}`);
+    }
     if (typeof profile.cash_available === 'number') {
       lines.push(`- Cash available: $${profile.cash_available.toLocaleString()}`);
     }
@@ -65,25 +72,60 @@ export function buildPortfolioContext(
 }
 
 export interface ExchangeContext {
-  /** Primary exchange the user trades on. Defaults to 'NYSE'. */
+  /** Primary exchange the user trades on. */
   primary: string;
   /** All exchanges represented in holdings (for multi-market users). */
   all: string[];
+  /** Primary portfolio currency. */
+  currency: string;
+}
+
+function normalizeExchangeList(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function currencyForExchange(exchange: string): string {
+  switch (exchange.trim().toUpperCase()) {
+    case 'ASX':
+      return 'AUD';
+    case 'LSE':
+      return 'GBP';
+    case 'TSX':
+      return 'CAD';
+    case 'HKEX':
+      return 'HKD';
+    case 'JPX':
+      return 'JPY';
+    case 'XETRA':
+    case 'EURONEXT':
+      return 'EUR';
+    case 'NYSE':
+    case 'NASDAQ':
+    default:
+      return 'USD';
+  }
 }
 
 export function buildExchangeContext(
   profile: Profile | null,
   positions: Position[]
 ): ExchangeContext {
+  const fromProfile = normalizeExchangeList(profile?.preferred_exchange);
   const fromPositions = Array.from(
-    new Set(positions.map((p) => p.exchange).filter((e): e is string => !!e))
+    new Set(
+      positions
+        .map((p) => p.exchange?.trim().toUpperCase())
+        .filter((e): e is string => Boolean(e))
+    )
   );
-  const preferred =
-    (profile && (profile as { preferred_exchange?: string }).preferred_exchange) ||
-    fromPositions[0] ||
-    'NYSE';
-  const all = Array.from(new Set([preferred, ...fromPositions]));
-  return { primary: preferred, all };
+  const preferred = fromProfile[0] || fromPositions[0] || 'ASX';
+  const all = Array.from(new Set([preferred, ...fromProfile, ...fromPositions]));
+  const currency = profile?.preferred_currency?.trim().toUpperCase() || currencyForExchange(preferred);
+  return { primary: preferred, all, currency };
 }
 
 function exchangeMention(ctx: ExchangeContext): string {
@@ -95,12 +137,18 @@ const today = (): string => new Date().toISOString().split('T')[0];
 
 export function buildOrchestratorSystemPrompt(ctx: ExchangeContext): string {
   const market = exchangeMention(ctx);
-  return `You are the orchestrator for Cerna Trading, an agentic equity research assistant. The user primarily trades on ${market}.
+  return `You are the orchestrator for Cerna Trading, an agentic equity research assistant. The user's preferred exchange is ${ctx.primary}. Their portfolio currency is ${ctx.currency}. Their holdings span ${market}.
 
 Your job: read the user's question and decide which specialized research agents to invoke in parallel. You do NOT answer the question yourself — downstream agents do that. You only decide the routing.
 
+Exchange handling rules:
+- Cerna supports screening and analysis across major exchanges including ASX, NYSE, NASDAQ, LSE, TSX, and HKEX.
+- Use the user's preferred exchange by default.
+- If the user explicitly asks about a different exchange, honor that exchange in the tool arguments.
+- Never refuse a request just because it mentions a different exchange from the user's default.
+
 Available tools:
-- screen_stocks — find stocks matching a strategy on the user's preferred exchange(s) (value, growth, dividend, quality, momentum, turnaround)
+- screen_stocks — find stocks matching a strategy on the relevant exchange (value, growth, dividend, quality, momentum, turnaround)
 - analyze_stock — deep dive on a single ticker (thesis, fundamentals, technical, peers, valuation, full)
 - brief_market — market news / macro / earnings briefing
 - check_portfolio — analyze the user's current holdings (health, concentration, rebalance, performance, full)
@@ -126,14 +174,17 @@ function withContext(tmpl: string, ctx: string, exchange: ExchangeContext): stri
     .replace('{portfolioContext}', ctx)
     .replace('{date}', today())
     .replace(/\{userExchange\}/g, exchange.primary)
+    .replace(/\{userCurrency\}/g, exchange.currency)
     .replace(/\{userMarkets\}/g, exchangeMention(exchange));
 }
 
-const SCREEN_PROMPT_TEMPLATE = `You are a senior equity analyst specializing in {userMarkets} equities. Today is {date}.
+const SCREEN_PROMPT_TEMPLATE = `You are a senior equity analyst covering equities across major exchanges. Today is {date}.
+
+The user's preferred exchange is {userExchange}. Their portfolio currency is {userCurrency}. Always contextualize your analysis to their exchange and market unless they explicitly ask about a different one.
 
 {portfolioContext}
 
-Task: Screen {userExchange} for 3-5 candidates matching the requested strategy. For EACH candidate, provide:
+Task: Screen the relevant exchange for 3-5 candidates matching the requested strategy. Use {userExchange} by default, but if the request explicitly names a different exchange, use that exchange instead. For EACH candidate, provide:
 1. **Match reason** — why this stock fits the strategy
 2. **Valuation** — current P/E, P/B, EV/EBITDA or dividend yield as appropriate, with numbers
 3. **Catalyst** — what drives re-rating in the next 6-18 months
@@ -149,11 +200,13 @@ Portfolio-aware rules:
 You MUST search the web for current prices, multiples and recent news. Cite every factual claim with the source.
 Be direct. No fluff. Tables are fine when they aid clarity.`;
 
-const ANALYZE_PROMPT_TEMPLATE = `You are an institutional-grade equity analyst — specializing in {userMarkets} but capable of analyzing stocks on any major exchange. Today is {date}.
+const ANALYZE_PROMPT_TEMPLATE = `You are an institutional-grade equity analyst covering companies on all major exchanges. Today is {date}.
+
+The user's preferred exchange is {userExchange}. Their portfolio currency is {userCurrency}. Always contextualize your analysis to their exchange and market unless they explicitly ask about a different one.
 
 {portfolioContext}
 
-Task: Analyze the requested ticker at the depth specified by analysis_type. Use current data — search the web for latest prices, filings, and news.
+Task: Analyze the requested ticker at the depth specified by analysis_type. If the user specifies an exchange or listing, honor that listing. Use current data — search the web for latest prices, filings, and news.
 
 Analysis type guidance:
 - thesis: bull case / bear case / base case, key KPIs, investment catalysts, 12-month price range
@@ -175,7 +228,9 @@ Contextualize to the user's portfolio:
 
 Cite every factual claim.`;
 
-const BRIEF_PROMPT_TEMPLATE = `You are Cerna's morning market briefer. The user primarily trades on {userMarkets}. Today is {date}.
+const BRIEF_PROMPT_TEMPLATE = `You are Cerna's morning market briefer. Today is {date}.
+
+The user's preferred exchange is {userExchange}. Their portfolio currency is {userCurrency}. Always contextualize your analysis to their exchange and market unless they explicitly ask about a different one.
 
 {portfolioContext}
 
@@ -184,7 +239,7 @@ Task: Deliver a 2-minute read, tailored to the user's holdings. Use web search f
 Structure (5 sections, concise):
 
 ## Market Overview
-What moved on {userExchange} yesterday / overnight (US, commodities, FX). 3-4 bullets.
+What moved on the relevant market yesterday / overnight (index, macro, commodities, FX). Default to {userExchange} unless the user asked about another exchange. 3-4 bullets.
 
 ## Portfolio-Relevant News
 News touching the user's specific holdings or watchlist. If nothing material, say so. Name tickers.
@@ -193,12 +248,14 @@ News touching the user's specific holdings or watchlist. If nothing material, sa
 One sector worth attention today (tie to holdings or requested sector).
 
 ## Coming Up
-Key events, economic data, earnings, ex-div dates in the next 1-5 trading days relevant to {userMarkets}.
+Key events, economic data, earnings, ex-div dates in the next 1-5 trading days relevant to the exchange in scope.
 
 ## Your Move
 One or two concrete, portfolio-aware suggestions. No generic advice. If no action warranted, say "no action needed — hold steady."`;
 
 const PORTFOLIO_CHECK_PROMPT_TEMPLATE = `You are a portfolio risk analyst for Cerna Trading.
+
+The user's preferred exchange is {userExchange}. Their portfolio currency is {userCurrency}. Always contextualize your analysis to their exchange and market unless they explicitly ask about a different one.
 
 {portfolioContext}
 
@@ -228,8 +285,11 @@ export function buildAnalyzePrompt(portfolioContext: string, exchange: ExchangeC
 export function buildBriefPrompt(portfolioContext: string, exchange: ExchangeContext): string {
   return withContext(BRIEF_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
-export function buildPortfolioCheckPrompt(portfolioContext: string): string {
-  return PORTFOLIO_CHECK_PROMPT_TEMPLATE.replace('{portfolioContext}', portfolioContext);
+export function buildPortfolioCheckPrompt(
+  portfolioContext: string,
+  exchange: ExchangeContext
+): string {
+  return withContext(PORTFOLIO_CHECK_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
 
 export function buildSynthesizerPrompt(portfolioContext: string, intelligenceContext?: string): string {
@@ -312,7 +372,9 @@ export function describeToolCall(name: string, args: Record<string, unknown>): s
     case 'screen_stocks': {
       const strategy = typeof args.strategy === 'string' ? args.strategy : 'stocks';
       const sector = typeof args.sector === 'string' && args.sector ? ` in ${args.sector}` : '';
-      return `Screening for ${strategy} stocks${sector}`;
+      const exchange =
+        typeof args.exchange === 'string' && args.exchange ? ` on ${args.exchange.toUpperCase()}` : '';
+      return `Screening for ${strategy} stocks${sector}${exchange}`;
     }
     case 'analyze_stock': {
       const ticker = typeof args.ticker === 'string' ? args.ticker.toUpperCase() : 'stock';
