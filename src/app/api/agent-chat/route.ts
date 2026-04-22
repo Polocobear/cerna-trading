@@ -31,6 +31,12 @@ import type {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
+
+const ROUTE_SOFT_BUDGET_MS = 55000;
+const SYNTHESIS_MIN_BUDGET_MS = 12000;
+const FOLLOW_UP_BUDGET_MS = 2500;
+const SESSION_TITLE_BUDGET_MS = 1500;
 
 interface AgentChatRequest {
   message: string;
@@ -148,6 +154,25 @@ function extractTickers(text: string): string[] {
   return out;
 }
 
+function summarizePartialText(text: string, limit = 220): string {
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  if (!trimmed) return '';
+  return trimmed.slice(0, limit) + (trimmed.length > limit ? '...' : '');
+}
+
+function buildTimeoutFallback(results: AgentResult[]): string {
+  const successful = results.filter((result) => result.status === 'success').slice(0, 2);
+  const snippets = successful
+    .map((result) => `- ${result.description}: ${summarizePartialText(result.data)}`)
+    .filter((snippet) => snippet.length > 4);
+
+  if (snippets.length === 0) {
+    return "I gathered some research, but the response took too long to finish. Please try again and I'll retry it.";
+  }
+
+  return `I gathered partial research, but the response took too long to finish. Here is what completed:\n${snippets.join('\n')}\n\nAsk again if you want me to continue from there.`;
+}
+
 export async function POST(req: Request) {
   let body: AgentChatRequest;
   try {
@@ -224,7 +249,9 @@ export async function POST(req: Request) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      const startedAt = Date.now();
       let closed = false;
+      const remainingBudgetMs = () => ROUTE_SOFT_BUDGET_MS - (Date.now() - startedAt);
       const emit = (payload: SSEPayload) => {
         if (closed) return;
         try {
@@ -270,7 +297,7 @@ export async function POST(req: Request) {
             citations: [],
           });
 
-          if (isFirstExchange) {
+          if (isFirstExchange && remainingBudgetMs() >= SESSION_TITLE_BUDGET_MS) {
             const title = await generateSessionTitle(message, fullResponse);
             if (title) emit({ type: 'session_title', title });
           }
@@ -343,6 +370,31 @@ export async function POST(req: Request) {
         }
 
         // (e) synthesize stream — inject intelligence context
+        if (remainingBudgetMs() < SYNTHESIS_MIN_BUDGET_MS) {
+          const fallback = buildTimeoutFallback(results);
+          const timeoutSources = dedupeSources(results);
+          emit({ type: 'stream', content: fallback });
+          if (timeoutSources.length > 0) {
+            emit({ type: 'sources', sources: timeoutSources });
+          }
+          fullResponse = fallback;
+          await supabase.from('chat_messages').insert({
+            user_id: user.id,
+            session_id: sessionId,
+            mode: 'ask',
+            role: 'assistant',
+            content: fullResponse,
+            citations: timeoutSources,
+          });
+          emit({
+            type: 'done',
+            model: results.some((r) => r.model === 'gemini-2.5-pro') ? 'mixed' : 'flash',
+            deepRemaining: getDeepUsageRemaining(user.id),
+          });
+          close();
+          return;
+        }
+
         const synthStream = synthesize(message, results, portfolioCtx.text, intelCtx.full);
         for await (const chunk of synthStream) {
           fullResponse += chunk;
@@ -363,8 +415,10 @@ export async function POST(req: Request) {
         const tickers = Array.from(
           new Set([...portfolioCtx.tickers, ...extractTickers(clean.slice(0, 1500))])
         ).slice(0, 8);
-        const followUps = await generateFollowUps(message, clean.slice(0, 500), tickers);
-        emit({ type: 'follow_ups', suggestions: followUps });
+        if (remainingBudgetMs() >= FOLLOW_UP_BUDGET_MS) {
+          const followUps = await generateFollowUps(message, clean.slice(0, 500), tickers);
+          emit({ type: 'follow_ups', suggestions: followUps });
+        }
 
         // (h) persist assistant message
         await supabase.from('chat_messages').insert({
@@ -377,7 +431,7 @@ export async function POST(req: Request) {
         });
 
         // (i) session title on first exchange
-        if (isFirstExchange) {
+        if (isFirstExchange && remainingBudgetMs() >= SESSION_TITLE_BUDGET_MS) {
           const title = await generateSessionTitle(message, clean);
           if (title) emit({ type: 'session_title', title });
         }
@@ -411,8 +465,9 @@ export async function POST(req: Request) {
         ]).catch(console.error);
 
       } catch (err) {
-        const safeMsg =
-          "I couldn't process that request right now. Please try again in a moment.";
+        const safeMsg = fullResponse.trim().length > 0
+          ? '\n\nThe response was cut short because the request took too long. Please ask again if you want me to continue.'
+          : "\n\nI couldn't process that request right now. Please try again in a moment.";
         const error = err as Error & { status?: number; rawText?: string; model?: string };
         console.error('[agent-chat] pipeline failed', {
           message: err instanceof Error ? err.message : 'unknown error',
@@ -423,7 +478,7 @@ export async function POST(req: Request) {
         });
         emit({
           type: 'stream',
-          content: `\n\n${safeMsg}`,
+          content: safeMsg,
         });
         emit({
           type: 'done',

@@ -1,15 +1,55 @@
 import {
   callGeminiV2Stream,
-  callWithRetry,
   sanitizeGeminiError,
 } from '@/lib/gemini/client';
 import { buildSynthesizerPrompt } from './prompts';
 import type { AgentResult } from './types';
 
+const SYNTHESIS_CONNECT_TIMEOUT_MS = 10000;
+const SYNTHESIS_STREAM_IDLE_TIMEOUT_MS = 12000;
+
 interface GeminiStreamChunk {
   candidates?: Array<{
     content?: { parts?: Array<{ text?: string }> };
   }>;
+}
+
+type GeminiStreamError = Error & {
+  status?: number;
+  rawText?: string;
+  model?: string;
+};
+
+function buildStreamError(status: number, rawText: string): GeminiStreamError {
+  const err = new Error(sanitizeGeminiError(status, rawText)) as GeminiStreamError;
+  err.status = status;
+  err.rawText = rawText;
+  err.model = 'gemini-2.5-flash';
+  return err;
+}
+
+async function readWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(buildStreamError(504, `Synthesis stream timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      reader
+        .read()
+        .then(resolve)
+        .catch(reject);
+    });
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function formatAgentResults(results: AgentResult[]): string {
@@ -49,15 +89,18 @@ export async function* synthesize(
 
   const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
 
-  const res = await callWithRetry(() =>
-    callGeminiV2Stream({
-      model: 'gemini-2.5-flash',
-      systemPrompt,
-      userMessage,
-      temperature: 0.6,
-      maxOutputTokens: 4096,
-    })
-  );
+  const res = await callGeminiV2Stream({
+    model: 'gemini-2.5-flash',
+    systemPrompt,
+    userMessage,
+    temperature: 0.6,
+    maxOutputTokens: 4096,
+    requestTimeoutMs: SYNTHESIS_CONNECT_TIMEOUT_MS,
+    retryOptions: {
+      maxRetries: 1,
+      backoffMs: 1000,
+    },
+  });
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
@@ -82,7 +125,7 @@ export async function* synthesize(
   let buffer = '';
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readWithTimeout(reader, SYNTHESIS_STREAM_IDLE_TIMEOUT_MS);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split('\n');
@@ -107,7 +150,11 @@ export async function* synthesize(
     }
   } catch (err) {
     console.error('[synthesizer] Stream read failed', err);
-    throw new Error('The AI service encountered a temporary error. Please try again.');
+    await reader.cancel().catch(() => {});
+    if ((err as GeminiStreamError).status) {
+      throw err;
+    }
+    throw buildStreamError(504, err instanceof Error ? err.message : 'Stream read failed');
   } finally {
     reader.releaseLock();
   }

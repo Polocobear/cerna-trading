@@ -1,4 +1,6 @@
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 12000;
+const DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS = 10000;
 
 // Tiered model routing (legacy callGemini):
 // STANDARD: Gemini 2.5 Pro — free tier (1,500 RPD), strong reasoning
@@ -59,11 +61,16 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
   const url = `${GEMINI_API_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
   return callWithRetry(() =>
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
+      model
+    )
   );
 }
 
@@ -105,6 +112,11 @@ export interface GeminiV2Options {
   responseMimeType?: 'application/json' | 'text/plain';
   temperature?: number;
   maxOutputTokens?: number;
+  requestTimeoutMs?: number;
+  retryOptions?: {
+    maxRetries?: number;
+    backoffMs?: number;
+  };
 }
 
 export interface GeminiV2FunctionCall {
@@ -149,6 +161,44 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type GeminiError = Error & {
+  status?: number;
+  rawText?: string;
+  model?: string;
+};
+
+function buildGeminiError(model: string, status: number, rawText: string): GeminiError {
+  const err = new Error(sanitizeGeminiError(status, rawText)) as GeminiError;
+  err.status = status;
+  err.rawText = rawText;
+  err.model = model;
+  return err;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  model: string
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw buildGeminiError(model, 504, `Request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function callWithRetry(
   fn: () => Promise<Response>,
   options?: {
@@ -159,26 +209,46 @@ export async function callWithRetry(
 ): Promise<Response> {
   const maxRetries = options?.maxRetries ?? 2;
   const backoffMs = options?.backoffMs ?? 2000;
+  let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const res = await fn();
+    try {
+      const res = await fn();
 
-    if (res.ok) return res;
+      if (res.ok) return res;
 
-    if (!isRetryableStatus(res.status) || attempt === maxRetries) {
-      return res;
+      if (!isRetryableStatus(res.status) || attempt === maxRetries) {
+        return res;
+      }
+
+      const jitter = Math.random() * 500;
+      await wait(backoffMs * (attempt + 1) + jitter);
+    } catch (err) {
+      lastError = err;
+      if (attempt === maxRetries) {
+        throw err;
+      }
+      const jitter = Math.random() * 500;
+      await wait(backoffMs * (attempt + 1) + jitter);
     }
-
-    const jitter = Math.random() * 500;
-    await wait(backoffMs * (attempt + 1) + jitter);
   }
 
-  return fn();
+  throw (lastError instanceof Error
+    ? lastError
+    : new Error('The AI service encountered a temporary error. Please try again.'));
 }
 
 export function sanitizeGeminiError(status: number, rawText: string): string {
   const normalized = rawText.toLowerCase();
 
+  if (
+    status === 408 ||
+    status === 504 ||
+    normalized.includes('timed out') ||
+    normalized.includes('timeout')
+  ) {
+    return 'The AI service is taking too long to respond. Please try again.';
+  }
   if (status === 503 || normalized.includes('high demand')) {
     return 'The AI service is temporarily overloaded. Please try again in a moment.';
   }
@@ -231,11 +301,32 @@ export async function callGeminiV2Stream(opts: GeminiV2Options): Promise<Respons
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
   const url = `${GEMINI_API_BASE}/models/${opts.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
-  return fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildV2Body(opts)),
-  });
+  const body = JSON.stringify(buildV2Body(opts));
+  try {
+    return await callWithRetry(
+      () =>
+        fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+          },
+          opts.requestTimeoutMs ?? DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
+          opts.model
+        ),
+      opts.retryOptions
+    );
+  } catch (err) {
+    if ((err as GeminiError).status) {
+      throw err;
+    }
+    console.error('[Gemini] Stream request failed', {
+      model: opts.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw buildGeminiError(opts.model, 504, err instanceof Error ? err.message : 'Stream request failed');
+  }
 }
 
 export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonStreamResult> {
@@ -243,13 +334,32 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
   const url = `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey}`;
   const body = JSON.stringify(buildV2Body(opts));
-  const res = await callWithRetry(() =>
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    })
-  );
+  let res: Response;
+  try {
+    res = await callWithRetry(
+      () =>
+        fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+          },
+          opts.requestTimeoutMs ?? DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
+          opts.model
+        ),
+      opts.retryOptions
+    );
+  } catch (err) {
+    if ((err as GeminiError).status) {
+      throw err;
+    }
+    console.error('[Gemini] Request failed', {
+      model: opts.model,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw buildGeminiError(opts.model, 504, err instanceof Error ? err.message : 'Request failed');
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error('[Gemini] Non-OK response', {
@@ -257,15 +367,7 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
       status: res.status,
       body: text,
     });
-    const err = new Error(sanitizeGeminiError(res.status, text)) as Error & {
-      status?: number;
-      rawText?: string;
-      model?: string;
-    };
-    err.status = res.status;
-    err.rawText = text;
-    err.model = opts.model;
-    throw err;
+    throw buildGeminiError(opts.model, res.status, text);
   }
   const json = (await res.json()) as GeminiResponseJson;
   const candidate = json.candidates?.[0];
