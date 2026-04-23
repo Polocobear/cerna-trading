@@ -74,9 +74,7 @@ function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
   const completionNote =
     s.status === 'error'
       ? sanitizeAgentStatusNote(s.error)
-      : s.status === 'complete'
-      ? s.summary
-      : undefined;
+      : s.summary;
   return {
     id: s.name,
     name: AGENT_LABELS[s.name],

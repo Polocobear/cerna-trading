@@ -57,8 +57,8 @@ export function AgentStatusCard({ status }: AgentStatusCardProps) {
               {state === 'pending' && <span className="ml-2 text-gray-500 font-normal">Queued</span>}
               {state === 'running' && <span className="ml-2 text-[#7c5bf0] font-normal">Researching...</span>}
             </div>
-            <div className={cn('text-[12px] truncate', state === 'error' ? 'text-amber-200/80' : 'text-[rgba(255,255,255,0.4)]')}>
-              {state === 'complete' && completionNote ? completionNote : state === 'error' && completionNote ? completionNote : description}
+            <div className={cn('text-[12px] leading-5', state === 'error' ? 'text-amber-200/80' : 'text-[rgba(255,255,255,0.4)]')}>
+              {completionNote ?? description}
             </div>
           </div>
         </div>

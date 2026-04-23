@@ -80,6 +80,16 @@ interface TriggerStatusResponse {
   finishedAt?: string | null;
 }
 
+interface TriggerTaskMetadata extends Record<string, unknown> {
+  status?: string;
+  agentStatus?: string;
+  agentStatusMessage?: string;
+  geminiStarted?: number;
+  geminiCompleted?: number;
+  geminiElapsedMs?: number;
+  elapsedMs?: number;
+}
+
 const TERMINAL_TRIGGER_FAILURES = new Set([
   'FAILED',
   'CANCELED',
@@ -88,6 +98,8 @@ const TERMINAL_TRIGGER_FAILURES = new Set([
   'TIMED_OUT',
   'EXPIRED',
 ]);
+const MAX_WAIT = 600000;
+const POLL_INTERVAL_MS = 2000;
 
 function genId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -110,6 +122,86 @@ function sanitizeClientErrorMessage(message: string): string {
 function isTriggerHandleResponse(value: unknown): value is TriggerAgentHandleResponse {
   if (!value || typeof value !== 'object') return false;
   return typeof (value as { runId?: unknown }).runId === 'string';
+}
+
+function readNumericMetadata(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function formatElapsedMs(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (totalMinutes > 0) {
+    return `${totalMinutes}m ${seconds.toString().padStart(2, '0')}s`;
+  }
+  return `${totalSeconds}s`;
+}
+
+function getTriggerElapsedMs(
+  metadata: Record<string, unknown> | undefined,
+  fallbackStartedAt: number
+): number {
+  const explicitElapsed =
+    readNumericMetadata(metadata?.elapsedMs) ?? readNumericMetadata(metadata?.geminiElapsedMs);
+  if (explicitElapsed != null) {
+    return Math.max(0, explicitElapsed);
+  }
+
+  const geminiStarted = readNumericMetadata(metadata?.geminiStarted);
+  const geminiCompleted = readNumericMetadata(metadata?.geminiCompleted);
+  if (geminiStarted != null && geminiCompleted != null) {
+    return Math.max(0, geminiCompleted - geminiStarted);
+  }
+  if (geminiStarted != null) {
+    return Math.max(0, Date.now() - geminiStarted);
+  }
+  return Math.max(0, Date.now() - fallbackStartedAt);
+}
+
+function isTriggerQueued(status: string, metadata: Record<string, unknown> | undefined): boolean {
+  if (typeof metadata?.status === 'string' && metadata.status === 'running') {
+    return false;
+  }
+  return status === 'PENDING' || status === 'QUEUED' || status === 'WAITING_FOR_DEPLOY';
+}
+
+function buildTriggerProgressNote(
+  handle: PendingTriggerHandle,
+  status: string | null,
+  metadata: Record<string, unknown> | undefined,
+  fallbackStartedAt: number
+): string {
+  const elapsedMs = getTriggerElapsedMs(metadata, fallbackStartedAt);
+  const queued =
+    (status == null || isTriggerQueued(status, metadata)) &&
+    readNumericMetadata(metadata?.geminiStarted) == null;
+  if (queued) {
+    return elapsedMs >= MAX_WAIT
+      ? 'Research is taking longer than expected - still working...'
+      : 'Queued';
+  }
+
+  const metadataMessage =
+    typeof metadata?.agentStatusMessage === 'string' && metadata.agentStatusMessage.trim()
+      ? metadata.agentStatusMessage.trim()
+      : handle.description;
+  const slowSuffix =
+    elapsedMs >= MAX_WAIT ? ' Research is taking longer than expected - still working...' : '';
+  return `${metadataMessage} (${formatElapsedMs(elapsedMs)} elapsed)${slowSuffix}`;
 }
 
 export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
@@ -181,8 +273,6 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       handles: PendingTriggerHandle[],
       signal: AbortSignal
     ): Promise<Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }>> => {
-      const MAX_WAIT_MS = 300000;
-      const POLL_INTERVAL_MS = 2000;
       const pending = new Map(handles.map((handle) => [handle.runId, handle]));
       const results: Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }> = [];
       const startedAt = Date.now();
@@ -190,10 +280,6 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       while (pending.size > 0) {
         if (signal.aborted) {
           throw new DOMException('Aborted', 'AbortError');
-        }
-
-        if (Date.now() - startedAt >= MAX_WAIT_MS) {
-          break;
         }
 
         const updates = await Promise.all(
@@ -219,55 +305,50 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
             if ((update.error as Error).name === 'AbortError') {
               throw update.error;
             }
-            const message = sanitizeClientErrorMessage(
-              update.error instanceof Error ? update.error.message : 'Failed to check research status'
-            );
-            results.push({
-              name: handle.toolName,
-              success: false,
-              content: null,
-              sources: [],
-              error: message,
-            });
-            pending.delete(handle.runId);
             setAgentsRecord((prev) => ({
               ...prev,
               [handle.toolName]: {
                 ...prev[handle.toolName],
-                status: 'error',
-                error: message,
+                status: prev[handle.toolName]?.status === 'pending' ? 'pending' : 'running',
+                summary: buildTriggerProgressNote(handle, null, undefined, startedAt),
               },
             }));
             continue;
           }
 
           if (!update.ok || !update.data) {
-            const message = sanitizeClientErrorMessage(update.data?.error ?? 'Failed to check research status');
-            results.push({
-              name: handle.toolName,
-              success: false,
-              content: null,
-              sources: [],
-              error: message,
-            });
-            pending.delete(handle.runId);
             setAgentsRecord((prev) => ({
               ...prev,
               [handle.toolName]: {
                 ...prev[handle.toolName],
-                status: 'error',
-                error: message,
+                status: prev[handle.toolName]?.status === 'pending' ? 'pending' : 'running',
+                summary: buildTriggerProgressNote(handle, null, update.data?.metadata, startedAt),
               },
             }));
             continue;
           }
 
           const status = update.data.status ?? 'UNKNOWN';
+          const taskMetadata = update.data.metadata as TriggerTaskMetadata | undefined;
+          const progressNote = buildTriggerProgressNote(handle, status, taskMetadata, startedAt);
+          const queued = isTriggerQueued(status, taskMetadata);
+
+          if (status !== 'COMPLETED' && !TERMINAL_TRIGGER_FAILURES.has(status)) {
+            setAgentsRecord((prev) => ({
+              ...prev,
+              [handle.toolName]: {
+                ...prev[handle.toolName],
+                status: queued ? 'pending' : 'running',
+                summary: progressNote,
+              },
+            }));
+          }
 
           if (status === 'COMPLETED') {
             const output = update.data.output;
             const success = Boolean(output?.success);
             const sources = output?.sources ?? [];
+            const elapsedMs = getTriggerElapsedMs(taskMetadata, startedAt);
             const errorMessage = success
               ? undefined
               : sanitizeClientErrorMessage(output?.error ?? update.data.error ?? 'Research task failed');
@@ -285,7 +366,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
               [handle.toolName]: {
                 ...prev[handle.toolName],
                 status: success ? 'complete' : 'error',
-                summary: success ? 'Done' : undefined,
+                summary: success ? `Done in ${formatElapsedMs(elapsedMs)}` : undefined,
                 error: errorMessage,
                 sources,
               },
@@ -318,27 +399,6 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
 
         if (pending.size > 0) {
           await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-        }
-      }
-
-      if (pending.size > 0) {
-        for (const handle of pending.values()) {
-          const message = 'Research timed out before completion. Please try again.';
-          results.push({
-            name: handle.toolName,
-            success: false,
-            content: null,
-            sources: [],
-            error: message,
-          });
-          setAgentsRecord((prev) => ({
-            ...prev,
-            [handle.toolName]: {
-              ...prev[handle.toolName],
-              status: 'error',
-              error: message,
-            },
-          }));
         }
       }
 
@@ -474,7 +534,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
                 ...prev,
                 [call.name]: {
                   name: classify(call.name),
-                  status: 'running',
+                  status: 'pending',
                   description: labelFor(call),
                   summary: 'Queued',
                   sources: [],
