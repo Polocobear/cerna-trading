@@ -1,14 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   callGeminiV2,
+  GEMINI_FLASH_MODEL,
+  GEMINI_MODEL,
+  GEMINI_RESEARCH_MODEL,
   sanitizeGeminiError,
-  type GeminiV2Model,
+  type GeminiThinkingLevel,
 } from '@/lib/gemini/client';
-import {
-  callAnthropicMessage,
-  sanitizeAnthropicError,
-  type AnthropicModel,
-} from '@/lib/anthropic/client';
 import {
   buildAnalyzePrompt,
   buildBriefPrompt,
@@ -26,6 +24,8 @@ import type {
   AgentSource,
 } from './types';
 import type { AgentContext } from '@/lib/memory/context-builder';
+
+type ResearchToolName = 'screen_stocks' | 'analyze_stock' | 'brief_market';
 
 function classify(toolName: string): AgentName {
   switch (toolName) {
@@ -132,28 +132,23 @@ function inferCurrencyFromExchange(exchange: string): string {
 
 export function safeAgentError(err: unknown): string {
   if (err instanceof Error) {
-    const providerError = err as Error & { status?: number; rawText?: string; model?: string };
-    if (typeof providerError.status === 'number') {
-      if (providerError.model?.startsWith('claude')) {
-        return sanitizeAnthropicError(
-          providerError.status,
-          providerError.rawText ?? providerError.message
-        );
-      }
+    const geminiError = err as Error & { status?: number; rawText?: string };
+    if (typeof geminiError.status === 'number') {
       return sanitizeGeminiError(
-        providerError.status,
-        providerError.rawText ?? providerError.message
+        geminiError.status,
+        geminiError.rawText ?? geminiError.message
       );
     }
-    if (
-      /Gemini|Anthropic|Claude/i.test(providerError.message) ||
-      /^\s*\d{3}\b/.test(providerError.message)
-    ) {
+    if (/Gemini/i.test(geminiError.message) || /^\s*\d{3}\b/.test(geminiError.message)) {
       return 'The AI service encountered a temporary error. Please try again.';
     }
-    return providerError.message;
+    return geminiError.message;
   }
   return 'unknown error';
+}
+
+function isResearchToolName(name: string): name is ResearchToolName {
+  return name === 'screen_stocks' || name === 'analyze_stock' || name === 'brief_market';
 }
 
 function formatMoney(n: number, currency: string): string {
@@ -295,6 +290,82 @@ async function handleLogTrade(
   };
 }
 
+export async function runResearchAgent(options: {
+  name: ResearchToolName;
+  args: Record<string, unknown>;
+  context: AgentContext;
+  model?: AgentResult['model'];
+  thinkingLevel?: GeminiThinkingLevel;
+  maxOutputTokens?: number;
+  requestTimeoutMs?: number;
+  deadlineMs?: number;
+  maxRetries?: number;
+  throwOnError?: boolean;
+}): Promise<{
+  name: ResearchToolName;
+  success: boolean;
+  content: string | null;
+  sources: AgentSource[];
+  model: AgentResult['model'];
+  error?: string;
+}> {
+  const {
+    name,
+    args,
+    context,
+    model = GEMINI_RESEARCH_MODEL,
+    thinkingLevel = 'medium',
+    maxOutputTokens = 32768,
+    requestTimeoutMs = 90000,
+    deadlineMs,
+    maxRetries = 1,
+    throwOnError = false,
+  } = options;
+
+  const agent = classify(name);
+  const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
+  const promptUserMessage = argsToUserMessage(name, args);
+
+  try {
+    const res = await callGeminiV2({
+      model,
+      systemPrompt,
+      userMessage: promptUserMessage,
+      enableSearchGrounding: true,
+      temperature: 1.0,
+      thinking_level: thinkingLevel,
+      maxOutputTokens,
+      requestTimeoutMs,
+      retryOptions: {
+        maxRetries,
+        backoffMs: 1000,
+        deadlineMs,
+      },
+    });
+
+    return {
+      name,
+      success: true,
+      content: res.text,
+      sources: res.sources,
+      model,
+    };
+  } catch (err) {
+    if (throwOnError) {
+      throw err;
+    }
+
+    return {
+      name,
+      success: false,
+      content: null,
+      sources: [],
+      model,
+      error: safeAgentError(err),
+    };
+  }
+}
+
 export async function runAgent(options: {
   name: string;
   args: Record<string, unknown>;
@@ -312,7 +383,7 @@ export async function runAgent(options: {
   model: AgentResult['model'];
   error?: string;
 }> {
-  const { name, args, context, deep, deadlineMs, supabase, userId, userMessage } = options;
+  const { name, args, context, deadlineMs, supabase, userId, userMessage } = options;
   const agent = classify(name);
 
   if (name === 'log_trade') {
@@ -322,132 +393,65 @@ export async function runAgent(options: {
         success: false,
         content: null,
         sources: [],
-        model: 'gemini-2.5-flash',
+        model: GEMINI_FLASH_MODEL,
         error: 'Missing log_trade dependencies',
       };
     }
     const logRes = await handleLogTrade(args, supabase, userId, userMessage, context.exchangeCtx);
-    return { name, model: 'gemini-2.5-flash', ...logRes };
+    return { name, model: GEMINI_FLASH_MODEL, ...logRes };
+  }
+
+  if (isResearchToolName(name)) {
+    return runResearchAgent({
+      name,
+      args,
+      context,
+      model: GEMINI_FLASH_MODEL,
+      thinkingLevel: 'low',
+      maxOutputTokens: 32768,
+      requestTimeoutMs: 25000,
+      deadlineMs,
+      maxRetries: 0,
+    });
   }
 
   const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
   const promptUserMessage = argsToUserMessage(name, args);
-
-  const usesClaudeResearch = agent === 'screen' || agent === 'analyze' || agent === 'brief';
-  const hasAnthropicKey = Boolean(process.env.ANTHROPIC_API_KEY);
-  const enableSearch = usesClaudeResearch;
-  const primaryGemini: GeminiV2Model = agent === 'portfolio' ? 'gemini-2.5-flash' : deep ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-  const primaryAnthropic: AnthropicModel = 'claude-sonnet-4-6';
-
-  const tryGemini = async (model: GeminiV2Model) => {
-    return callGeminiV2({
-      model,
-      systemPrompt,
-      userMessage: promptUserMessage,
-      enableSearchGrounding: enableSearch,
-      temperature: 0.55,
-      maxOutputTokens: model === 'gemini-2.5-pro' ? 32768 : 8192,
-      requestTimeoutMs: enableSearch ? 30000 : 12000,
-      retryOptions: {
-        maxRetries: enableSearch ? 0 : 1,
-        backoffMs: 1000,
-        deadlineMs,
-      },
-    });
-  };
-
-  const tryAnthropic = async (model: AnthropicModel) => {
-    return callAnthropicMessage({
-      model,
-      systemPrompt,
-      userMessage: promptUserMessage,
-      enableWebSearch: true,
-      temperature: 0.4,
-      maxTokens: 8192,
-      requestTimeoutMs: 30000,
-      retryOptions: {
-        maxRetries: 1,
-        backoffMs: 1000,
-        deadlineMs,
-      },
-    });
-  };
 
   try {
     if (Date.now() > deadlineMs - 5000) {
       throw new Error('Pipeline deadline approached before execution');
     }
 
-    if (usesClaudeResearch && hasAnthropicKey) {
-      const res = await tryAnthropic(primaryAnthropic);
-      return {
-        name,
-        success: true,
-        content: res.text,
-        sources: res.sources,
-        model: primaryAnthropic,
-      };
-    }
-
-    const res = await tryGemini(primaryGemini);
+    const res = await callGeminiV2({
+      model: GEMINI_FLASH_MODEL,
+      systemPrompt,
+      userMessage: promptUserMessage,
+      enableSearchGrounding: false,
+      temperature: 1.0,
+      thinking_level: 'low',
+      maxOutputTokens: 8192,
+      requestTimeoutMs: 12000,
+      retryOptions: {
+        maxRetries: 1,
+        backoffMs: 1000,
+        deadlineMs,
+      },
+    });
     return {
       name,
       success: true,
       content: res.text,
       sources: res.sources,
-      model: primaryGemini,
+      model: GEMINI_FLASH_MODEL,
     };
   } catch (err) {
-    if (usesClaudeResearch && hasAnthropicKey && Date.now() <= deadlineMs - 10000) {
-      try {
-        const res = await tryGemini('gemini-2.5-flash');
-        return {
-          name,
-          success: true,
-          content: res.text,
-          sources: res.sources,
-          model: 'gemini-2.5-flash',
-        };
-      } catch (fallbackErr) {
-        return {
-          name,
-          success: false,
-          content: null,
-          sources: [],
-          model: 'gemini-2.5-flash',
-          error: safeAgentError(fallbackErr),
-        };
-      }
-    }
-
-    if (primaryGemini === 'gemini-2.5-pro' && Date.now() <= deadlineMs - 10000) {
-      try {
-        const res = await tryGemini('gemini-2.5-flash');
-        return {
-          name,
-          success: true,
-          content: res.text,
-          sources: res.sources,
-          model: 'gemini-2.5-flash',
-        };
-      } catch (fallbackErr) {
-        return {
-          name,
-          success: false,
-          content: null,
-          sources: [],
-          model: 'gemini-2.5-flash',
-          error: safeAgentError(fallbackErr),
-        };
-      }
-    }
-
     return {
       name,
       success: false,
       content: null,
       sources: [],
-      model: usesClaudeResearch && hasAnthropicKey ? primaryAnthropic : primaryGemini,
+      model: GEMINI_FLASH_MODEL,
       error: safeAgentError(err),
     };
   }
@@ -531,7 +535,7 @@ export async function executeAgents(
         data: '',
         sources: [],
         executionTime: 0,
-        model: 'gemini-2.5-flash',
+        model: GEMINI_MODEL,
         error: safeAgentError(s.reason),
       });
     }

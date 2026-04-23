@@ -273,6 +273,7 @@ export async function POST(req: Request) {
             history: history.slice(-10),
             exchangeCtx: exchangeCtx,
             investmentStrategy: profile?.investment_strategy ?? null,
+            deadlineMs: pipelineDeadline,
           });
         } finally {
           console.error(`[agent-chat] ORCHESTRATOR complete: ${Date.now() - pipelineStart}ms`);
@@ -439,7 +440,7 @@ export async function POST(req: Request) {
         }
 
         // (j) done
-        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== 'gemini-2.5-flash')
+        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== 'gemini-3-flash-preview')
           ? 'mixed'
           : 'flash';
         emit({

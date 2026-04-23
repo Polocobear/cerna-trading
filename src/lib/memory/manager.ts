@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry } from '@/lib/gemini/client';
+import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { MemoryCategory, MemoryEntry } from './types';
 
@@ -125,10 +125,11 @@ export async function extractMemories(
   let extracted: ExtractedMemory[] = [];
   try {
     const result = await callGeminiV2WithRetry({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       systemPrompt: 'You extract structured memory entries from conversations. Output only valid JSON.',
       userMessage: prompt,
-      temperature: 0.2,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 2048,
       responseMimeType: 'application/json',
     });

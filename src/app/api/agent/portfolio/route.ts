@@ -13,12 +13,13 @@ export async function POST(req: NextRequest) {
 
     const { args, context, deep } = await req.json();
 
+    const deadlineMs = Date.now() + 45000;
     const result = await runAgent({
       name: 'check_portfolio',
       args,
       context,
       deep: !!deep,
-      deadlineMs: Date.now() + 50000,
+      deadlineMs,
     });
 
     return NextResponse.json(result);

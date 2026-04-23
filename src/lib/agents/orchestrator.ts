@@ -1,6 +1,6 @@
 import {
   callGeminiV2,
-  sanitizeGeminiError,
+  GEMINI_MODEL,
   type GeminiFunctionDeclaration,
   type GeminiV2NonStreamResult,
 } from '@/lib/gemini/client';
@@ -200,6 +200,7 @@ type OrchestratorContext = {
   exchangeCtx: ExchangeContext;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   investmentStrategy?: string | null;
+  deadlineMs?: number;
 };
 
 function inferDefaultStrategy(investmentStrategy?: string | null):
@@ -541,16 +542,18 @@ export async function runOrchestrator(
   let result: GeminiV2NonStreamResult;
   try {
     result = await callGeminiV2({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       systemPrompt: buildOrchestratorSystemPrompt(context.exchangeCtx),
       messages,
       tools: TOOL_DECLARATIONS,
-      temperature: 0.2,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 2048,
       requestTimeoutMs: 15000,
       retryOptions: {
         maxRetries: 1,
         backoffMs: 1000,
+        deadlineMs: context.deadlineMs,
       },
     });
   } catch (err) {

@@ -53,6 +53,42 @@ interface UseAgentChatResult {
   loadSession: (messages: AgentChatMessage[]) => void;
 }
 
+interface DirectAgentResponse {
+  success: boolean;
+  content: string | null;
+  sources?: Source[];
+  error?: string;
+  model?: string;
+}
+
+interface TriggerAgentHandleResponse {
+  runId: string;
+  publicAccessToken?: string;
+  agentType: AgentName;
+}
+
+interface PendingTriggerHandle extends TriggerAgentHandleResponse {
+  toolName: string;
+  description: string;
+}
+
+interface TriggerStatusResponse {
+  status?: string;
+  output?: DirectAgentResponse | null;
+  error?: string | null;
+  metadata?: Record<string, unknown>;
+  finishedAt?: string | null;
+}
+
+const TERMINAL_TRIGGER_FAILURES = new Set([
+  'FAILED',
+  'CANCELED',
+  'CRASHED',
+  'SYSTEM_FAILURE',
+  'TIMED_OUT',
+  'EXPIRED',
+]);
+
 function genId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -69,6 +105,11 @@ function sanitizeClientErrorMessage(message: string): string {
     return 'The AI service is temporarily unavailable. Please try again.';
   }
   return message || 'Something went wrong. Please try again.';
+}
+
+function isTriggerHandleResponse(value: unknown): value is TriggerAgentHandleResponse {
+  if (!value || typeof value !== 'object') return false;
+  return typeof (value as { runId?: unknown }).runId === 'string';
 }
 
 export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
@@ -134,6 +175,177 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
     setIsLoading(false);
     setIsStreaming(false);
   }, []);
+
+  const waitForTriggerRuns = useCallback(
+    async (
+      handles: PendingTriggerHandle[],
+      signal: AbortSignal
+    ): Promise<Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }>> => {
+      const MAX_WAIT_MS = 120000;
+      const POLL_INTERVAL_MS = 2000;
+      const pending = new Map(handles.map((handle) => [handle.runId, handle]));
+      const results: Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }> = [];
+      const startedAt = Date.now();
+
+      while (pending.size > 0) {
+        if (signal.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+
+        if (Date.now() - startedAt >= MAX_WAIT_MS) {
+          break;
+        }
+
+        const updates = await Promise.all(
+          Array.from(pending.values()).map(async (handle) => {
+            try {
+              const res = await fetch(`/api/agent/status?runId=${encodeURIComponent(handle.runId)}`, {
+                signal,
+              });
+              const data = (await res.json().catch(() => ({}))) as TriggerStatusResponse & {
+                error?: string;
+              };
+              return { handle, ok: res.ok, data };
+            } catch (error) {
+              return { handle, ok: false, data: null as TriggerStatusResponse | null, error };
+            }
+          })
+        );
+
+        for (const update of updates) {
+          const handle = update.handle;
+
+          if ('error' in update && update.error) {
+            if ((update.error as Error).name === 'AbortError') {
+              throw update.error;
+            }
+            const message = sanitizeClientErrorMessage(
+              update.error instanceof Error ? update.error.message : 'Failed to check research status'
+            );
+            results.push({
+              name: handle.toolName,
+              success: false,
+              content: null,
+              sources: [],
+              error: message,
+            });
+            pending.delete(handle.runId);
+            setAgentsRecord((prev) => ({
+              ...prev,
+              [handle.toolName]: {
+                ...prev[handle.toolName],
+                status: 'error',
+                error: message,
+              },
+            }));
+            continue;
+          }
+
+          if (!update.ok || !update.data) {
+            const message = sanitizeClientErrorMessage(update.data?.error ?? 'Failed to check research status');
+            results.push({
+              name: handle.toolName,
+              success: false,
+              content: null,
+              sources: [],
+              error: message,
+            });
+            pending.delete(handle.runId);
+            setAgentsRecord((prev) => ({
+              ...prev,
+              [handle.toolName]: {
+                ...prev[handle.toolName],
+                status: 'error',
+                error: message,
+              },
+            }));
+            continue;
+          }
+
+          const status = update.data.status ?? 'UNKNOWN';
+
+          if (status === 'COMPLETED') {
+            const output = update.data.output;
+            const success = Boolean(output?.success);
+            const sources = output?.sources ?? [];
+            const errorMessage = success
+              ? undefined
+              : sanitizeClientErrorMessage(output?.error ?? update.data.error ?? 'Research task failed');
+
+            results.push({
+              name: handle.toolName,
+              success,
+              content: output?.content ?? null,
+              sources,
+              error: errorMessage,
+            });
+            pending.delete(handle.runId);
+            setAgentsRecord((prev) => ({
+              ...prev,
+              [handle.toolName]: {
+                ...prev[handle.toolName],
+                status: success ? 'complete' : 'error',
+                summary: success ? 'Done' : undefined,
+                error: errorMessage,
+                sources,
+              },
+            }));
+            continue;
+          }
+
+          if (TERMINAL_TRIGGER_FAILURES.has(status)) {
+            const message = sanitizeClientErrorMessage(
+              update.data.error ?? 'Research task failed'
+            );
+            results.push({
+              name: handle.toolName,
+              success: false,
+              content: null,
+              sources: [],
+              error: message,
+            });
+            pending.delete(handle.runId);
+            setAgentsRecord((prev) => ({
+              ...prev,
+              [handle.toolName]: {
+                ...prev[handle.toolName],
+                status: 'error',
+                error: message,
+              },
+            }));
+          }
+        }
+
+        if (pending.size > 0) {
+          await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        }
+      }
+
+      if (pending.size > 0) {
+        for (const handle of pending.values()) {
+          const message = 'Research timed out before completion. Please try again.';
+          results.push({
+            name: handle.toolName,
+            success: false,
+            content: null,
+            sources: [],
+            error: message,
+          });
+          setAgentsRecord((prev) => ({
+            ...prev,
+            [handle.toolName]: {
+              ...prev[handle.toolName],
+              status: 'error',
+              error: message,
+            },
+          }));
+        }
+      }
+
+      return results;
+    },
+    []
+  );
 
   const endpointFor = (toolName: string): string => {
     const map: Record<string, string> = {
@@ -240,7 +452,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
         }
         setAgentsRecord(initialAgents);
 
-        const agentPromises = toolCalls.map(async (call: { name: string, arguments: Record<string, unknown> }) => {
+        const agentResponses = await Promise.all(toolCalls.map(async (call: { name: string, arguments: Record<string, unknown> }) => {
           const endpoint = endpointFor(call.name);
           try {
             const res = await fetch(endpoint, {
@@ -249,31 +461,94 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
               body: JSON.stringify({ args: call.arguments, context, deep: depth === 'deep' }),
               signal: controller.signal,
             });
-            const result = await res.json();
-            
+
+            const result = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              throw new Error(
+                typeof result?.error === 'string' ? result.error : 'Agent execution failed'
+              );
+            }
+
+            if (isTriggerHandleResponse(result)) {
+              setAgentsRecord((prev) => ({
+                ...prev,
+                [call.name]: {
+                  name: classify(call.name),
+                  status: 'running',
+                  description: labelFor(call),
+                  summary: 'Queued',
+                  sources: [],
+                },
+              }));
+
+              return {
+                kind: 'trigger' as const,
+                handle: {
+                  ...result,
+                  toolName: call.name,
+                  description: labelFor(call),
+                },
+              };
+            }
+
+            const directResult = result as DirectAgentResponse;
+            const success = Boolean(directResult.success);
+
             setAgentsRecord((prev) => ({
               ...prev,
               [call.name]: {
                 name: classify(call.name),
-                status: result.success ? 'complete' : 'error',
+                status: success ? 'complete' : 'error',
                 description: labelFor(call),
-                summary: result.success ? 'Done' : undefined,
-                error: result.success ? undefined : result.error,
-                sources: result.sources ?? [],
+                summary: success ? 'Done' : undefined,
+                error: success ? undefined : directResult.error,
+                sources: directResult.sources ?? [],
               },
             }));
-            
-            return { name: call.name, ...result };
+
+            return {
+              kind: 'direct' as const,
+              result: {
+                name: call.name,
+                success,
+                content: directResult.content ?? null,
+                sources: directResult.sources ?? [],
+                error: directResult.error,
+              },
+            };
           } catch (err) {
+            const message = sanitizeClientErrorMessage(
+              err instanceof Error ? err.message : 'Agent execution failed'
+            );
             setAgentsRecord((prev) => ({
               ...prev,
-              [call.name]: { ...prev[call.name], status: 'error', error: 'Agent execution failed' },
+              [call.name]: { ...prev[call.name], status: 'error', error: message },
             }));
-            return { name: call.name, success: false, content: null, sources: [] };
+            return {
+              kind: 'direct' as const,
+              result: {
+                name: call.name,
+                success: false,
+                content: null,
+                sources: [],
+                error: message,
+              },
+            };
           }
-        });
+        }));
 
-        const results = await Promise.all(agentPromises);
+        const directResults = agentResponses
+          .filter((response): response is Extract<typeof response, { kind: 'direct' }> => response.kind === 'direct')
+          .map((response) => response.result);
+        const triggerHandles = agentResponses
+          .filter((response): response is Extract<typeof response, { kind: 'trigger' }> => response.kind === 'trigger')
+          .map((response) => response.handle);
+        const triggerResults =
+          triggerHandles.length > 0
+            ? await waitForTriggerRuns(triggerHandles, controller.signal)
+            : [];
+
+        const results = [...directResults, ...triggerResults];
         const successful = results.filter((r) => r.success);
 
         if (successful.length === 0) {
@@ -376,7 +651,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
         setIsLoading(false);
       }
     },
-    [sessionId, depth]
+    [sessionId, depth, waitForTriggerRuns]
   );
 
   const sendMessage = useCallback(

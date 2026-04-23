@@ -1,5 +1,6 @@
 import {
   callGeminiV2Stream,
+  GEMINI_MODEL,
   sanitizeGeminiError,
 } from '@/lib/gemini/client';
 import { buildSynthesizerPrompt } from './prompts';
@@ -24,7 +25,7 @@ function buildStreamError(status: number, rawText: string): GeminiStreamError {
   const err = new Error(sanitizeGeminiError(status, rawText)) as GeminiStreamError;
   err.status = status;
   err.rawText = rawText;
-  err.model = 'gemini-2.5-flash';
+  err.model = GEMINI_MODEL;
   return err;
 }
 
@@ -133,10 +134,11 @@ export async function runSynthesizer(options: {
   const remaining = Math.max(5000, Math.min(15000, deadlineMs - Date.now()));
 
   const res = await callGeminiV2Stream({
-    model: 'gemini-2.5-flash',
+    model: GEMINI_MODEL,
     systemPrompt,
     userMessage,
-    temperature: 0.6,
+    temperature: 1.0,
+    thinking_level: 'low',
     maxOutputTokens: 8192,
     requestTimeoutMs: remaining,
     retryOptions: {
@@ -240,10 +242,11 @@ export async function* synthesize(
   const remaining = Math.max(5000, Math.min(15000, (deadlineMs ?? Date.now() + 15000) - Date.now()));
 
   const res = await callGeminiV2Stream({
-    model: 'gemini-2.5-flash',
+    model: GEMINI_MODEL,
     systemPrompt,
     userMessage,
-    temperature: 0.6,
+    temperature: 1.0,
+    thinking_level: 'low',
     maxOutputTokens: 8192,
     requestTimeoutMs: remaining,
     retryOptions: {
@@ -256,7 +259,7 @@ export async function* synthesize(
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
     console.error('[synthesizer] Non-OK response', {
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       status: res.status,
       body: text,
     });
@@ -267,7 +270,7 @@ export async function* synthesize(
     };
     err.status = res.status;
     err.rawText = text;
-    err.model = 'gemini-2.5-flash';
+    err.model = GEMINI_MODEL;
     throw err;
   }
 

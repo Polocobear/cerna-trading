@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry } from '@/lib/gemini/client';
+import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
 import { fetchPricesForTickers } from '@/lib/prices/server-fetch';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Decision, DecisionType, DecisionConfidence, OutcomeStatus } from './types';
@@ -104,10 +104,11 @@ export async function extractDecisions(
 
   try {
     const result = await callGeminiV2WithRetry({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       systemPrompt: 'You extract actionable investment recommendations from financial advisor responses. Output only valid JSON.',
       userMessage: `${DECISION_EXTRACTION_PROMPT}\n\nResponse to analyze:\n${response.slice(0, 3000)}`,
-      temperature: 0.1,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 2048,
       responseMimeType: 'application/json',
     });

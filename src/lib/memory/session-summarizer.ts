@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry } from '@/lib/gemini/client';
+import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SessionSummaryRecord } from './types';
 
@@ -71,10 +71,11 @@ export async function summarizeSession(
 
   try {
     const result = await callGeminiV2WithRetry({
-      model: 'gemini-2.5-flash',
+      model: GEMINI_MODEL,
       systemPrompt: 'You summarize financial advisory conversations. Output only valid JSON.',
       userMessage: `${SESSION_SUMMARY_PROMPT}\n\nConversation:\n${formatted}`,
-      temperature: 0.2,
+      temperature: 1.0,
+      thinking_level: 'low',
       maxOutputTokens: 512,
       responseMimeType: 'application/json',
     });
