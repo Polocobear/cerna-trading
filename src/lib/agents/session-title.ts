@@ -1,10 +1,10 @@
-import { callGeminiV2, GEMINI_MODEL } from '@/lib/gemini/client';
+import { callClaude, CLAUDE_HAIKU } from '@/lib/claude/client';
 import { buildSessionTitlePrompt } from './prompts';
 
 /**
  * Generate a 4-6 word title for a chat session.
  *
- * Deviation: The DB has no `chat_sessions` table — sessions are virtual,
+ * Deviation: The DB has no `chat_sessions` table - sessions are virtual,
  * derived from chat_messages. There is nowhere to persist a title without
  * schema changes (which are out of scope per the spec's DO-NOT-MODIFY list
  * for /supabase/**). Callers should treat the returned title as transient
@@ -16,20 +16,16 @@ export async function generateSessionTitle(
 ): Promise<string> {
   try {
     const body = `User: ${userMessage.slice(0, 400)}\n\nAssistant: ${assistantResponse.slice(0, 400)}`;
-    const res = await callGeminiV2({
-      model: GEMINI_MODEL,
+    const response = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt: buildSessionTitlePrompt(),
       userMessage: body,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 64,
-      requestTimeoutMs: 2000,
-      retryOptions: {
-        maxRetries: 0,
-        backoffMs: 0,
-      },
+      useWebSearch: false,
+      maxTokens: 64,
+      thinkingBudget: 0,
+      temperature: 1,
     });
-    return cleanTitle(res.text);
+    return cleanTitle(response.text);
   } catch {
     return '';
   }

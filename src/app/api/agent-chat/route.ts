@@ -6,6 +6,7 @@ import {
   recordDeepUsage,
   getDeepUsageRemaining,
 } from '@/lib/gemini/deep-usage';
+import { CLAUDE_HAIKU } from '@/lib/claude/client';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import {
   buildPortfolioContext,
@@ -440,7 +441,7 @@ export async function POST(req: Request) {
         }
 
         // (j) done
-        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== 'gemini-3-flash-preview')
+        const modelLabel: 'flash' | 'mixed' = results.some((r) => r.model !== CLAUDE_HAIKU)
           ? 'mixed'
           : 'flash';
         emit({

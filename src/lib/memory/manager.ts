@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
+import { callClaude, CLAUDE_HAIKU, parseClaudeJson } from '@/lib/claude/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { MemoryCategory, MemoryEntry } from './types';
 
@@ -124,17 +124,17 @@ export async function extractMemories(
 
   let extracted: ExtractedMemory[] = [];
   try {
-    const result = await callGeminiV2WithRetry({
-      model: GEMINI_MODEL,
+    const result = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt: 'You extract structured memory entries from conversations. Output only valid JSON.',
       userMessage: prompt,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json',
+      useWebSearch: false,
+      maxTokens: 2048,
+      thinkingBudget: 0,
+      temperature: 1,
     });
 
-    const parsed: unknown = JSON.parse(result.text.trim());
+    const parsed = parseClaudeJson<unknown>(result.text);
     if (Array.isArray(parsed)) {
       extracted = parsed
         .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)

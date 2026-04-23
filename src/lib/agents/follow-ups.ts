@@ -1,10 +1,5 @@
-import { callGeminiV2, GEMINI_MODEL } from '@/lib/gemini/client';
+import { callClaude, CLAUDE_HAIKU, parseClaudeJson } from '@/lib/claude/client';
 import { buildFollowUpsPrompt } from './prompts';
-
-const SCHEMA = {
-  type: 'ARRAY' as const,
-  items: { type: 'STRING' as const },
-};
 
 export async function generateFollowUps(
   userQuery: string,
@@ -15,24 +10,17 @@ export async function generateFollowUps(
   const userMessage = `User asked: "${userQuery}"\n\nAssistant response (first 500 chars):\n${responseFirst500}${tickerHint}\n\nReturn 2-3 follow-up questions as a JSON array of strings.`;
 
   try {
-    const res = await callGeminiV2({
-      model: GEMINI_MODEL,
+    const response = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt: buildFollowUpsPrompt(),
       userMessage,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 256,
-      responseMimeType: 'application/json',
-      responseSchema: SCHEMA,
-      requestTimeoutMs: 2500,
-      retryOptions: {
-        maxRetries: 0,
-        backoffMs: 0,
-      },
+      useWebSearch: false,
+      maxTokens: 256,
+      thinkingBudget: 0,
+      temperature: 1,
     });
 
-    const text = res.text.trim();
-    const parsed = parseFollowUpsArray(text);
+    const parsed = parseFollowUpsArray(response.text);
     if (parsed.length === 0) return [];
     return parsed.slice(0, 3);
   } catch {
@@ -41,26 +29,11 @@ export async function generateFollowUps(
 }
 
 function parseFollowUpsArray(text: string): string[] {
-  // Try strict JSON first
-  try {
-    const j = JSON.parse(text);
-    if (Array.isArray(j)) {
-      return j.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((s) => s.trim());
-    }
-  } catch {
-    // fall through
-  }
-  // Attempt to find a JSON array substring
-  const match = text.match(/\[[\s\S]*\]/);
-  if (match) {
-    try {
-      const j = JSON.parse(match[0]);
-      if (Array.isArray(j)) {
-        return j.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((s) => s.trim());
-      }
-    } catch {
-      // ignore
-    }
+  const parsed = parseClaudeJson<unknown>(text);
+  if (Array.isArray(parsed)) {
+    return parsed
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => value.trim());
   }
   return [];
 }

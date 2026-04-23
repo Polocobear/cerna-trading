@@ -1,12 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import {
-  callGeminiV2,
-  GEMINI_FLASH_MODEL,
-  GEMINI_MODEL,
-  GEMINI_RESEARCH_MODEL,
-  sanitizeGeminiError,
-  type GeminiThinkingLevel,
-} from '@/lib/gemini/client';
+import { isClaudeApiError, callClaude, CLAUDE_HAIKU, CLAUDE_SONNET, sanitizeClaudeError } from '@/lib/claude/client';
 import {
   buildAnalyzePrompt,
   buildBriefPrompt,
@@ -26,6 +19,7 @@ import type {
 import type { AgentContext } from '@/lib/memory/context-builder';
 
 type ResearchToolName = 'screen_stocks' | 'analyze_stock' | 'brief_market';
+type ResearchThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
 function classify(toolName: string): AgentName {
   switch (toolName) {
@@ -41,6 +35,10 @@ function classify(toolName: string): AgentName {
     default:
       return 'portfolio';
   }
+}
+
+function defaultModelForTool(name: string): AgentResult['model'] {
+  return isResearchToolName(name) ? CLAUDE_SONNET : CLAUDE_HAIKU;
 }
 
 function argsToUserMessage(name: string, args: Record<string, unknown>): string {
@@ -60,7 +58,7 @@ function argsToUserMessage(name: string, args: Record<string, unknown>): string 
       const ticker = String(args.ticker ?? '').toUpperCase();
       const type = String(args.analysis_type ?? 'thesis');
       const context = args.context ? `\n\nUser context: ${String(args.context)}` : '';
-      return `Analyze ${ticker} — ${type} analysis.${context}`;
+      return `Analyze ${ticker} - ${type} analysis.${context}`;
     }
     case 'brief_market': {
       const focus = String(args.focus ?? 'general');
@@ -92,6 +90,21 @@ function systemPromptFor(
       return buildPortfolioCheckPrompt(portfolioContext, exchange);
     case 'trade_log':
       return '';
+  }
+}
+
+function thinkingBudgetFor(level: ResearchThinkingLevel): number {
+  switch (level) {
+    case 'minimal':
+      return 0;
+    case 'low':
+      return 2048;
+    case 'medium':
+      return 4096;
+    case 'high':
+      return 8192;
+    default:
+      return 4096;
   }
 }
 
@@ -131,18 +144,17 @@ function inferCurrencyFromExchange(exchange: string): string {
 }
 
 export function safeAgentError(err: unknown): string {
+  if (isClaudeApiError(err)) {
+    return sanitizeClaudeError(err.status, err.message);
+  }
   if (err instanceof Error) {
-    const geminiError = err as Error & { status?: number; rawText?: string };
-    if (typeof geminiError.status === 'number') {
-      return sanitizeGeminiError(
-        geminiError.status,
-        geminiError.rawText ?? geminiError.message
-      );
+    if (/ANTHROPIC_API_KEY/i.test(err.message)) {
+      return 'The Anthropic API key is not configured.';
     }
-    if (/Gemini/i.test(geminiError.message) || /^\s*\d{3}\b/.test(geminiError.message)) {
+    if (/Claude|Anthropic/i.test(err.message) || /^\s*\d{3}\b/.test(err.message)) {
       return 'The AI service encountered a temporary error. Please try again.';
     }
-    return geminiError.message;
+    return err.message;
   }
   return 'unknown error';
 }
@@ -177,7 +189,7 @@ async function handleLogTrade(
       success: false,
       content: null,
       sources: [],
-      error: "I couldn't parse that trade clearly — could you confirm the ticker, buy/sell, number of shares, and price?",
+      error: "I couldn't parse that trade clearly - could you confirm the ticker, buy/sell, number of shares, and price?",
     };
   }
 
@@ -252,7 +264,7 @@ async function handleLogTrade(
     }
   } else {
     if (!existing) {
-      confirmation = `I logged the ${action} of ${shares} ${ticker} at ${formatMoney(price, currency)}, but I don't have a matching open position on file — you may want to double-check your records.`;
+      confirmation = `I logged the ${action} of ${shares} ${ticker} at ${formatMoney(price, currency)}, but I don't have a matching open position on file - you may want to double-check your records.`;
     } else {
       finalShares = existing.shares - shares;
       if (finalShares <= 0.0001) {
@@ -295,7 +307,7 @@ export async function runResearchAgent(options: {
   args: Record<string, unknown>;
   context: AgentContext;
   model?: AgentResult['model'];
-  thinkingLevel?: GeminiThinkingLevel;
+  thinkingLevel?: ResearchThinkingLevel;
   maxOutputTokens?: number;
   requestTimeoutMs?: number;
   deadlineMs?: number;
@@ -307,18 +319,21 @@ export async function runResearchAgent(options: {
   content: string | null;
   sources: AgentSource[];
   model: AgentResult['model'];
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    webSearchRequests: number;
+  };
   error?: string;
 }> {
   const {
     name,
     args,
     context,
-    model = GEMINI_RESEARCH_MODEL,
+    model = CLAUDE_SONNET,
     thinkingLevel = 'medium',
     maxOutputTokens = 32768,
-    requestTimeoutMs = 90000,
     deadlineMs,
-    maxRetries = 1,
     throwOnError = false,
   } = options;
 
@@ -327,28 +342,28 @@ export async function runResearchAgent(options: {
   const promptUserMessage = argsToUserMessage(name, args);
 
   try {
-    const res = await callGeminiV2({
+    if (deadlineMs && Date.now() > deadlineMs - 5000) {
+      throw new Error('Pipeline deadline approached before research execution');
+    }
+
+    const response = await callClaude({
       model,
       systemPrompt,
       userMessage: promptUserMessage,
-      enableSearchGrounding: true,
-      temperature: 1.0,
-      thinking_level: thinkingLevel,
-      maxOutputTokens,
-      requestTimeoutMs,
-      retryOptions: {
-        maxRetries,
-        backoffMs: 1000,
-        deadlineMs,
-      },
+      useWebSearch: true,
+      webSearchMaxUses: thinkingLevel === 'high' ? 10 : 5,
+      maxTokens: maxOutputTokens,
+      thinkingBudget: thinkingBudgetFor(thinkingLevel),
+      temperature: 1,
     });
 
     return {
       name,
       success: true,
-      content: res.text,
-      sources: res.sources,
+      content: response.text,
+      sources: response.sources,
       model,
+      usage: response.usage,
     };
   } catch (err) {
     if (throwOnError) {
@@ -383,7 +398,7 @@ export async function runAgent(options: {
   model: AgentResult['model'];
   error?: string;
 }> {
-  const { name, args, context, deadlineMs, supabase, userId, userMessage } = options;
+  const { name, args, context, deep, deadlineMs, supabase, userId, userMessage } = options;
   const agent = classify(name);
 
   if (name === 'log_trade') {
@@ -393,12 +408,12 @@ export async function runAgent(options: {
         success: false,
         content: null,
         sources: [],
-        model: GEMINI_FLASH_MODEL,
+        model: CLAUDE_HAIKU,
         error: 'Missing log_trade dependencies',
       };
     }
     const logRes = await handleLogTrade(args, supabase, userId, userMessage, context.exchangeCtx);
-    return { name, model: GEMINI_FLASH_MODEL, ...logRes };
+    return { name, model: CLAUDE_HAIKU, ...logRes };
   }
 
   if (isResearchToolName(name)) {
@@ -406,10 +421,9 @@ export async function runAgent(options: {
       name,
       args,
       context,
-      model: GEMINI_FLASH_MODEL,
-      thinkingLevel: 'low',
-      maxOutputTokens: 32768,
-      requestTimeoutMs: 25000,
+      model: CLAUDE_SONNET,
+      thinkingLevel: deep ? 'high' : 'low',
+      maxOutputTokens: deep ? 32768 : 16384,
       deadlineMs,
       maxRetries: 0,
     });
@@ -423,27 +437,22 @@ export async function runAgent(options: {
       throw new Error('Pipeline deadline approached before execution');
     }
 
-    const res = await callGeminiV2({
-      model: GEMINI_FLASH_MODEL,
+    const response = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt,
       userMessage: promptUserMessage,
-      enableSearchGrounding: false,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 8192,
-      requestTimeoutMs: 12000,
-      retryOptions: {
-        maxRetries: 1,
-        backoffMs: 1000,
-        deadlineMs,
-      },
+      useWebSearch: false,
+      maxTokens: 8192,
+      thinkingBudget: 0,
+      temperature: 1,
     });
+
     return {
       name,
       success: true,
-      content: res.text,
-      sources: res.sources,
-      model: GEMINI_FLASH_MODEL,
+      content: response.text,
+      sources: response.sources,
+      model: CLAUDE_HAIKU,
     };
   } catch (err) {
     return {
@@ -451,7 +460,7 @@ export async function runAgent(options: {
       success: false,
       content: null,
       sources: [],
-      model: GEMINI_FLASH_MODEL,
+      model: CLAUDE_HAIKU,
       error: safeAgentError(err),
     };
   }
@@ -483,7 +492,7 @@ export async function executeAgents(
       watchlist: [],
       exchangeCtx: ctx.exchange,
       portfolioContext: ctx.portfolioContext,
-      intelligenceContext: ''
+      intelligenceContext: '',
     };
 
     const start = Date.now();
@@ -511,34 +520,37 @@ export async function executeAgents(
 
     if (agentResult.status === 'success') {
       const trimmed = agentResult.data.trim().replace(/\s+/g, ' ');
-      const summary = !trimmed ? 'completed' : trimmed.slice(0, 140) + (trimmed.length > 140 ? '…' : '');
+      const summary = !trimmed ? 'completed' : trimmed.slice(0, 140) + (trimmed.length > 140 ? '...' : '');
       onEvent({ type: 'agent_complete', agent, summary, sources: agentResult.sources });
     } else {
       onEvent({ type: 'agent_error', agent, error: agentResult.error ?? 'unknown error' });
     }
+
     return agentResult;
   });
 
   const settled = await Promise.allSettled(promises);
   const results: AgentResult[] = [];
   for (let i = 0; i < settled.length; i++) {
-    const s = settled[i];
-    if (s.status === 'fulfilled') {
-      results.push(s.value);
-    } else {
-      const tool = toolCalls[i];
-      const agent = classify(tool.name);
-      results.push({
-        agent,
-        description: describeToolCall(tool.name, tool.arguments),
-        status: 'error',
-        data: '',
-        sources: [],
-        executionTime: 0,
-        model: GEMINI_MODEL,
-        error: safeAgentError(s.reason),
-      });
+    const settledResult = settled[i];
+    if (settledResult.status === 'fulfilled') {
+      results.push(settledResult.value);
+      continue;
     }
+
+    const tool = toolCalls[i];
+    const agent = classify(tool.name);
+    results.push({
+      agent,
+      description: describeToolCall(tool.name, tool.arguments),
+      status: 'error',
+      data: '',
+      sources: [],
+      executionTime: 0,
+      model: defaultModelForTool(tool.name),
+      error: safeAgentError(settledResult.reason),
+    });
   }
+
   return results;
 }

@@ -1,9 +1,10 @@
+import { APIError } from '@anthropic-ai/sdk';
 import {
-  callGeminiV2,
-  GEMINI_MODEL,
-  type GeminiFunctionDeclaration,
-  type GeminiV2NonStreamResult,
-} from '@/lib/gemini/client';
+  callClaude,
+  CLAUDE_HAIKU,
+  isClaudeApiError,
+  parseClaudeJson,
+} from '@/lib/claude/client';
 import { buildOrchestratorSystemPrompt, type ExchangeContext } from './prompts';
 import type { ToolCall, ToolName } from './types';
 
@@ -15,137 +16,25 @@ const VALID_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'log_trade',
 ]);
 
-const TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
-  {
-    name: 'screen_stocks',
-    description:
-      "Screen for stocks matching criteria. Supports major exchanges including ASX, NYSE, NASDAQ, LSE, TSX, and HKEX. Use the user's preferred exchange unless they explicitly ask for a different one.",
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        strategy: {
-          type: 'STRING',
-          enum: ['value', 'growth', 'dividend', 'quality', 'momentum', 'turnaround'],
-          description: 'The screening strategy to apply',
-        },
-        sector: {
-          type: 'STRING',
-          description: 'Optional sector filter (e.g. "mining", "financials", "healthcare")',
-        },
-        market_cap: {
-          type: 'STRING',
-          enum: ['large', 'mid', 'small', 'all'],
-          description: 'Optional market cap tier',
-        },
-        exchange: {
-          type: 'STRING',
-          description:
-            'Optional explicit exchange override (e.g. ASX, NYSE, NASDAQ, LSE, TSX, HKEX). Use when the user names a specific exchange.',
-        },
-        additional_criteria: {
-          type: 'STRING',
-          description: 'Any extra qualitative constraints from the user',
-        },
-      },
-      required: ['strategy'],
-    },
-  },
-  {
-    name: 'analyze_stock',
-    description:
-      'Deep institutional analysis of a single ticker. Use for "analyze X", "should I buy X", "thoughts on X".',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        ticker: { type: 'STRING', description: 'Ticker symbol, uppercase, no exchange suffix' },
-        analysis_type: {
-          type: 'STRING',
-          enum: ['thesis', 'fundamentals', 'technical', 'peers', 'valuation', 'full'],
-          description: 'Depth and angle of analysis',
-        },
-        context: {
-          type: 'STRING',
-          description: 'Optional extra context from the user query',
-        },
-      },
-      required: ['ticker', 'analysis_type'],
-    },
-  },
-  {
-    name: 'brief_market',
-    description:
-      'Produce a market briefing. Use for "what happened today?", "anything interesting?", macro/news questions.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        focus: {
-          type: 'STRING',
-          enum: ['general', 'portfolio_relevant', 'sector', 'macro', 'earnings'],
-          description: 'Briefing angle',
-        },
-        sector: {
-          type: 'STRING',
-          description: 'Sector to spotlight, if applicable',
-        },
-      },
-      required: ['focus'],
-    },
-  },
-  {
-    name: 'check_portfolio',
-    description:
-      'Analyze the user\'s current holdings. Use for "how\'s my portfolio", concentration/rebalance/performance questions.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        check_type: {
-          type: 'STRING',
-          enum: ['health', 'concentration', 'rebalance', 'performance', 'full'],
-          description: 'Type of portfolio check',
-        },
-      },
-      required: ['check_type'],
-    },
-  },
-  {
-    name: 'log_trade',
-    description:
-      'Log a trade the user has made or is reporting. Use when the user says they bought, sold, added to, or trimmed a position. Parse the trade details from their message.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        ticker: {
-          type: 'STRING',
-          description: "Stock ticker symbol, e.g. 'BHP', 'AAPL', 'CBA'",
-        },
-        action: {
-          type: 'STRING',
-          enum: ['buy', 'sell', 'add', 'trim'],
-          description:
-            "The trade action: 'buy' opens a new position, 'add' increases an existing one, 'sell' closes, 'trim' reduces.",
-        },
-        shares: {
-          type: 'NUMBER',
-          description: 'Number of shares traded',
-        },
-        price: {
-          type: 'NUMBER',
-          description: 'Per-share price paid or received',
-        },
-        exchange: {
-          type: 'STRING',
-          description:
-            'Exchange if mentioned (ASX, NYSE, NASDAQ, etc). Infer from ticker if not stated.',
-        },
-        currency: {
-          type: 'STRING',
-          description: 'Currency if mentioned. Infer from exchange if not stated.',
-        },
-      },
-      required: ['ticker', 'action', 'shares', 'price'],
-    },
-  },
-];
+const ROUTING_RESPONSE_INSTRUCTION = `Return JSON only with this exact shape:
+{
+  "directReply": string | null,
+  "toolCalls": [
+    {
+      "name": "screen_stocks" | "analyze_stock" | "brief_market" | "check_portfolio" | "log_trade",
+      "arguments": { ... }
+    }
+  ],
+  "deep": boolean
+}
+
+Rules:
+- If you return one or more tool calls, set "directReply" to null.
+- If you reply directly, set "toolCalls" to [].
+- Use at most 3 tool calls.
+- Never wrap the JSON in markdown fences.
+- Tickers must be uppercase with no exchange suffix.
+- Omit optional arguments unless the user actually provided them or they are clearly implied.`;
 
 const EXCHANGE_CODES = ['ASX', 'NYSE', 'NASDAQ', 'LSE', 'TSX', 'HKEX', 'JPX', 'XETRA', 'EURONEXT'];
 
@@ -529,60 +418,94 @@ function buildFallbackPlan(
   };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseToolCallsFromResponse(text: string): {
+  toolCalls: ToolCall[];
+  directReply: string | null;
+  deep?: boolean;
+} | null {
+  const parsed = parseClaudeJson<unknown>(text);
+  if (!isPlainObject(parsed)) return null;
+
+  const rawToolCalls = Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [];
+  const toolCalls: ToolCall[] = [];
+  const seen = new Set<string>();
+
+  for (const rawToolCall of rawToolCalls) {
+    if (!isPlainObject(rawToolCall)) continue;
+    const name = rawToolCall.name;
+    const args = rawToolCall.arguments;
+    if (typeof name !== 'string' || !VALID_TOOLS.has(name as ToolName)) continue;
+    if (!isPlainObject(args)) continue;
+
+    const key = `${name}:${JSON.stringify(args)}`;
+    if (seen.has(key)) continue;
+    if (toolCalls.some((tool) => tool.name === name)) continue;
+    seen.add(key);
+    toolCalls.push({ name: name as ToolName, arguments: args });
+
+    if (toolCalls.length >= 3) break;
+  }
+
+  const directReply =
+    typeof parsed.directReply === 'string' && parsed.directReply.trim().length > 0
+      ? parsed.directReply.trim()
+      : null;
+  const deep = typeof parsed.deep === 'boolean' ? parsed.deep : undefined;
+
+  return {
+    toolCalls,
+    directReply: toolCalls.length > 0 ? null : directReply,
+    ...(deep !== undefined ? { deep } : {}),
+  };
+}
+
 export async function runOrchestrator(
   userMessage: string,
   context: OrchestratorContext
 ): Promise<{ toolCalls: ToolCall[]; directReply: string | null; deep?: boolean }> {
-  const history = context.history ?? [];
-  const messages = [
-    ...history.map((h) => ({ role: h.role, content: h.content })),
-    { role: 'user' as const, content: userMessage },
-  ];
-
-  let result: GeminiV2NonStreamResult;
   try {
-    result = await callGeminiV2({
-      model: GEMINI_MODEL,
-      systemPrompt: buildOrchestratorSystemPrompt(context.exchangeCtx),
-      messages,
-      tools: TOOL_DECLARATIONS,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 2048,
-      requestTimeoutMs: 15000,
-      retryOptions: {
-        maxRetries: 1,
-        backoffMs: 1000,
-        deadlineMs: context.deadlineMs,
-      },
+    const response = await callClaude({
+      model: CLAUDE_HAIKU,
+      systemPrompt: `${buildOrchestratorSystemPrompt(context.exchangeCtx)}\n\n${ROUTING_RESPONSE_INSTRUCTION}`,
+      userMessage,
+      conversationHistory: context.history ?? [],
+      useWebSearch: false,
+      maxTokens: 2048,
+      thinkingBudget: 0,
+      temperature: 1,
     });
+
+    const parsed = parseToolCallsFromResponse(response.text);
+    if (!parsed) {
+      throw new Error('Claude returned an unparseable routing response');
+    }
+    if (parsed.toolCalls.length === 0) {
+      return {
+        toolCalls: [],
+        directReply: parsed.directReply || 'How can I help with your portfolio today?',
+        deep: parsed.deep,
+      };
+    }
+    return {
+      toolCalls: parsed.toolCalls,
+      directReply: null,
+      deep: parsed.deep,
+    };
   } catch (err) {
-    const geminiError = err as Error & { status?: number; rawText?: string };
+    const status = isClaudeApiError(err) ? err.status : err instanceof APIError ? err.status : undefined;
+    const message = err instanceof Error ? err.message : String(err);
+    if (isClaudeApiError(err)) {
+      console.error(`[ORCHESTRATOR] Claude API error ${err.status}: ${err.message}`);
+    }
     console.warn('[orchestrator] Falling back to heuristic routing', {
       message: userMessage,
-      status: geminiError.status,
-      error: err instanceof Error ? err.message : String(err),
+      status,
+      error: message,
     });
     return buildFallbackPlan(userMessage, context);
   }
-
-  const seen = new Set<string>();
-  const toolCalls: ToolCall[] = [];
-  for (const fc of result.functionCalls) {
-    if (!VALID_TOOLS.has(fc.name as ToolName)) continue;
-    const key = `${fc.name}:${JSON.stringify(fc.args ?? {})}`;
-    if (seen.has(key)) continue;
-    const nameSeen = toolCalls.some((t) => t.name === fc.name);
-    if (nameSeen) continue;
-    seen.add(key);
-    toolCalls.push({ name: fc.name as ToolName, arguments: fc.args ?? {} });
-    if (toolCalls.length >= 3) break;
-  }
-
-  if (toolCalls.length === 0) {
-    const trimmed = result.text.trim();
-    return { directReply: trimmed || 'How can I help with your portfolio today?', toolCalls: [] };
-  }
-
-  return { toolCalls, directReply: null };
 }

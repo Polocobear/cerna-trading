@@ -1,93 +1,49 @@
-import {
-  callGeminiV2Stream,
-  GEMINI_MODEL,
-  sanitizeGeminiError,
-} from '@/lib/gemini/client';
+import { callClaudeStream, CLAUDE_HAIKU } from '@/lib/claude/client';
 import { buildSynthesizerPrompt } from './prompts';
 import type { AgentSource, AgentResult } from './types';
 import type { AgentContext } from '@/lib/memory/context-builder';
 
-const SYNTHESIS_STREAM_IDLE_TIMEOUT_MS = 12000;
-
-interface GeminiStreamChunk {
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
-  }>;
-}
-
-type GeminiStreamError = Error & {
-  status?: number;
-  rawText?: string;
-  model?: string;
-};
-
-function buildStreamError(status: number, rawText: string): GeminiStreamError {
-  const err = new Error(sanitizeGeminiError(status, rawText)) as GeminiStreamError;
-  err.status = status;
-  err.rawText = rawText;
-  err.model = GEMINI_MODEL;
-  return err;
-}
-
-async function readWithTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-  try {
-    return await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(buildStreamError(504, `Synthesis stream timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      reader
-        .read()
-        .then(resolve)
-        .catch(reject);
-    });
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-}
-
-function formatAgentResultsChunked(results: Array<{ name: string; success: boolean; content: string | null; error?: string; sources?: AgentSource[] }>): { agentBlock: string; failedAgents: string[] } {
+function formatAgentResultsChunked(
+  results: Array<{ name: string; success: boolean; content: string | null; error?: string; sources?: AgentSource[] }>
+): { agentBlock: string; failedAgents: string[] } {
   const sections: string[] = [];
   const failedAgents: string[] = [];
-  for (const r of results) {
-    if (!r.success || !r.content) {
-      failedAgents.push(r.name);
+
+  for (const result of results) {
+    if (!result.success || !result.content) {
+      failedAgents.push(result.name);
       continue;
     }
-    const header = `## ${r.name.toUpperCase()} AGENT`;
-    const body = r.content;
+
+    const header = `## ${result.name.toUpperCase()} AGENT`;
     const sourcesList =
-      r.sources && r.sources.length > 0
-        ? `\n\nAgent sources:\n${r.sources.map((s) => `- [${s.title || s.domain}] ${s.url}`).join('\n')}`
+      result.sources && result.sources.length > 0
+        ? `\n\nAgent sources:\n${result.sources.map((source) => `- [${source.title || source.domain}] ${source.url}`).join('\n')}`
         : '';
-    sections.push(`${header}\n\n${body}${sourcesList}`);
+    sections.push(`${header}\n\n${result.content}${sourcesList}`);
   }
+
   return { agentBlock: sections.join('\n\n---\n\n'), failedAgents };
 }
 
 function formatAgentResultsLegacy(results: AgentResult[]): { agentBlock: string; failedAgents: string[] } {
   const sections: string[] = [];
   const failedAgents: string[] = [];
-  for (const r of results) {
-    if (r.status === 'error') {
-      failedAgents.push(r.description);
+
+  for (const result of results) {
+    if (result.status === 'error') {
+      failedAgents.push(result.description);
       continue;
     }
-    const header = `## ${r.agent.toUpperCase()} AGENT — ${r.description}`;
-    const body = r.data;
+
+    const header = `## ${result.agent.toUpperCase()} AGENT - ${result.description}`;
     const sourcesList =
-      r.sources.length > 0
-        ? `\n\nAgent sources:\n${r.sources.map((s) => `- [${s.title || s.domain}] ${s.url}`).join('\n')}`
+      result.sources.length > 0
+        ? `\n\nAgent sources:\n${result.sources.map((source) => `- [${source.title || source.domain}] ${source.url}`).join('\n')}`
         : '';
-    sections.push(`${header}\n\n${body}${sourcesList}`);
+    sections.push(`${header}\n\n${result.data}${sourcesList}`);
   }
+
   return { agentBlock: sections.join('\n\n---\n\n'), failedAgents };
 }
 
@@ -95,13 +51,115 @@ export function dedupeSources(
   results: Array<{ sources?: AgentSource[] }>
 ): Array<{ title: string; url: string; domain: string; snippet?: string }> {
   const seen = new Map<string, { title: string; url: string; domain: string; snippet?: string }>();
-  for (const r of results) {
-    for (const s of r.sources ?? []) {
-      if (!s.url) continue;
-      if (!seen.has(s.url)) seen.set(s.url, s);
+  for (const result of results) {
+    for (const source of result.sources ?? []) {
+      if (!source.url || seen.has(source.url)) continue;
+      seen.set(source.url, source);
     }
   }
   return Array.from(seen.values());
+}
+
+function mergeSources(primary: AgentSource[], fallback: AgentSource[]): AgentSource[] {
+  const merged = new Map<string, AgentSource>();
+  for (const source of [...primary, ...fallback]) {
+    if (!source.url || merged.has(source.url)) continue;
+    merged.set(source.url, source);
+  }
+  return Array.from(merged.values());
+}
+
+function parseSourcesFromResponse(text: string): AgentSource[] {
+  const match = text.match(/<sources>([\s\S]*?)<\/sources>/i);
+  if (!match?.[1]) return [];
+
+  try {
+    const parsed = JSON.parse(match[1].trim());
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is AgentSource => typeof item === 'object' && item !== null && typeof item.url === 'string')
+      .map((item) => ({
+        title: typeof item.title === 'string' ? item.title : item.domain || item.url,
+        url: item.url,
+        domain: typeof item.domain === 'string' ? item.domain : new URL(item.url).hostname.replace(/^www\./, ''),
+        ...(typeof item.snippet === 'string' ? { snippet: item.snippet } : {}),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function buildUserMessage(
+  userQuery: string | null,
+  agentBlock: string,
+  consolidatedSources: AgentSource[],
+  failedAgents: string[]
+): string {
+  const userBlock = userQuery ? `# User query\n${userQuery}\n\n` : '';
+  const sourceHints =
+    consolidatedSources.length > 0
+      ? `\n\n# Available sources (use and cite as appropriate)\n${consolidatedSources
+          .map((source, index) => `${index + 1}. ${source.title || source.domain} - ${source.url}`)
+          .join('\n')}`
+      : '';
+  const failedHint =
+    failedAgents.length > 0
+      ? `\n\n# Failed Agents\nThe following research tasks failed to complete: ${failedAgents.join(', ')}.\nBriefly note this failure at the end of your response. Do not output raw error messages.`
+      : '';
+
+  return `${userBlock}# Specialist agent findings\n\n${agentBlock}${sourceHints}${failedHint}\n\nNow synthesize. Remember to append the <action-block>...</action-block> (unless trivial) and the <sources>[...]</sources> JSON block.`;
+}
+
+class AsyncTextQueue {
+  private values: string[] = [];
+  private ended = false;
+  private error: unknown = null;
+  private waiting: Array<{
+    resolve: (value: IteratorResult<string>) => void;
+    reject: (reason?: unknown) => void;
+  }> = [];
+
+  push(value: string): void {
+    if (this.ended) return;
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter.resolve({ value, done: false });
+      return;
+    }
+    this.values.push(value);
+  }
+
+  close(): void {
+    if (this.ended) return;
+    this.ended = true;
+    while (this.waiting.length > 0) {
+      this.waiting.shift()?.resolve({ value: undefined, done: true });
+    }
+  }
+
+  fail(error: unknown): void {
+    if (this.ended) return;
+    this.error = error;
+    this.ended = true;
+    while (this.waiting.length > 0) {
+      this.waiting.shift()?.reject(error);
+    }
+  }
+
+  async next(): Promise<IteratorResult<string>> {
+    if (this.values.length > 0) {
+      return { value: this.values.shift() as string, done: false };
+    }
+    if (this.error) {
+      throw this.error;
+    }
+    if (this.ended) {
+      return { value: undefined, done: true };
+    }
+    return new Promise<IteratorResult<string>>((resolve, reject) => {
+      this.waiting.push({ resolve, reject });
+    });
+  }
 }
 
 export async function runSynthesizer(options: {
@@ -113,105 +171,36 @@ export async function runSynthesizer(options: {
   onFollowUps: (followUps: string[]) => void;
 }): Promise<void> {
   const { results, context, deadlineMs, onToken, onSources, onFollowUps } = options;
-  
-  const systemPrompt = buildSynthesizerPrompt(context.portfolioContext, context.intelligenceContext);
-  const { agentBlock, failedAgents } = formatAgentResultsChunked(results);
+
+  if (Date.now() > deadlineMs - 3000) {
+    throw new Error('Pipeline deadline approached before synthesis');
+  }
 
   const consolidatedSources = dedupeSources(results);
-  const sourceHints =
-    consolidatedSources.length > 0
-      ? `\n\n# Available sources (use and cite as appropriate)\n${consolidatedSources
-          .map((s, i) => `${i + 1}. ${s.title || s.domain} — ${s.url}`)
-          .join('\n')}`
-      : '';
+  const sourcesContext = consolidatedSources
+    .map((source, index) => `[${index + 1}] ${source.title} - ${source.domain}\n${source.url}`)
+    .join('\n\n');
+  const systemPrompt = buildSynthesizerPrompt(
+    context.portfolioContext,
+    context.intelligenceContext,
+    sourcesContext
+  );
+  const { agentBlock, failedAgents } = formatAgentResultsChunked(results);
+  const userMessage = buildUserMessage(null, agentBlock, consolidatedSources, failedAgents);
 
-  const failedHint = failedAgents.length > 0
-    ? `\n\n# Failed Agents\nThe following research tasks failed to complete: ${failedAgents.join(', ')}.\nBriefly note this failure at the end of your response, e.g., "Note: I wasn't able to complete [failed task] due to a timeout. Ask me to try that specifically if you'd like." Do not output raw error messages.`
-    : '';
-
-  const userMessage = `# Specialist agent findings\n\n${agentBlock}${sourceHints}${failedHint}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
-
-  const remaining = Math.max(5000, Math.min(15000, deadlineMs - Date.now()));
-
-  const res = await callGeminiV2Stream({
-    model: GEMINI_MODEL,
-    systemPrompt,
-    userMessage,
-    temperature: 1.0,
-    thinking_level: 'low',
-    maxOutputTokens: 8192,
-    requestTimeoutMs: remaining,
-    retryOptions: {
-      maxRetries: 1,
-      backoffMs: 1000,
-      deadlineMs: deadlineMs,
+  const response = await callClaudeStream(
+    {
+      model: CLAUDE_HAIKU,
+      systemPrompt,
+      userMessage,
+      maxTokens: 8192,
+      temperature: 1,
     },
-  });
+    onToken
+  );
 
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
-    throw buildStreamError(res.status, text);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let fullResponse = '';
-
-  try {
-    while (true) {
-      const { done, value } = await readWithTimeout(reader, SYNTHESIS_STREAM_IDLE_TIMEOUT_MS);
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n');
-      buffer = parts.pop() ?? '';
-      for (const line of parts) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-          const data = JSON.parse(payload) as GeminiStreamChunk;
-          const parts2 = data.candidates?.[0]?.content?.parts ?? [];
-          for (const p of parts2) {
-            if (typeof p.text === 'string' && p.text.length > 0) {
-              fullResponse += p.text;
-              onToken(p.text);
-            }
-          }
-        } catch {
-          // ignore malformed chunk
-        }
-      }
-    }
-  } catch (err) {
-    await reader.cancel().catch(() => {});
-    throw err;
-  } finally {
-    reader.releaseLock();
-  }
-
-  const re = /<sources>([\s\S]*?)<\/sources>/i;
-  const m = fullResponse.match(re);
-  if (m && m[1]) {
-    try {
-      const parsed = JSON.parse(m[1].trim());
-      if (Array.isArray(parsed)) {
-        const s: AgentSource[] = parsed.filter((x): x is AgentSource => typeof x === 'object' && x !== null && !!x.url);
-        const merged = new Map<string, AgentSource>();
-        for (const source of [...s, ...consolidatedSources]) {
-          if (source.url && !merged.has(source.url)) merged.set(source.url, source);
-        }
-        onSources(Array.from(merged.values()));
-      }
-    } catch {
-      // ignore
-    }
-  } else {
-    onSources(consolidatedSources);
-  }
-
-  onFollowUps([]); 
+  onSources(mergeSources(parseSourcesFromResponse(response.text), consolidatedSources));
+  onFollowUps([]);
 }
 
 export async function* synthesize(
@@ -222,94 +211,43 @@ export async function* synthesize(
   sourcesContext?: string,
   deadlineMs?: number
 ): AsyncGenerator<string, void, unknown> {
-  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext, sourcesContext);
-  const { agentBlock, failedAgents } = formatAgentResultsLegacy(agentResults);
-
-  const consolidatedSources = dedupeSources(agentResults);
-  const sourceHints =
-    consolidatedSources.length > 0
-      ? `\n\n# Available sources (use and cite as appropriate)\n${consolidatedSources
-          .map((s, i) => `${i + 1}. ${s.title || s.domain} — ${s.url}`)
-          .join('\n')}`
-      : '';
-
-  const failedHint = failedAgents.length > 0
-    ? `\n\n# Failed Agents\nThe following research tasks failed to complete: ${failedAgents.join(', ')}.\nBriefly note this failure at the end of your response, e.g., "Note: I wasn't able to complete [failed task] due to a timeout. Ask me to try that specifically if you'd like." Do not output raw error messages.`
-    : '';
-
-  const userMessage = `# User query\n${userQuery}\n\n# Specialist agent findings\n\n${agentBlock}${sourceHints}${failedHint}\n\nNow synthesize. Remember to append the <action-block>…</action-block> (unless trivial) and the <sources>[…]</sources> JSON block.`;
-
-  const remaining = Math.max(5000, Math.min(15000, (deadlineMs ?? Date.now() + 15000) - Date.now()));
-
-  const res = await callGeminiV2Stream({
-    model: GEMINI_MODEL,
-    systemPrompt,
-    userMessage,
-    temperature: 1.0,
-    thinking_level: 'low',
-    maxOutputTokens: 8192,
-    requestTimeoutMs: remaining,
-    retryOptions: {
-      maxRetries: 1,
-      backoffMs: 1000,
-      deadlineMs: deadlineMs,
-    },
-  });
-
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
-    console.error('[synthesizer] Non-OK response', {
-      model: GEMINI_MODEL,
-      status: res.status,
-      body: text,
-    });
-    const err = new Error(sanitizeGeminiError(res.status, text)) as Error & {
-      status?: number;
-      rawText?: string;
-      model?: string;
-    };
-    err.status = res.status;
-    err.rawText = text;
-    err.model = GEMINI_MODEL;
-    throw err;
+  if (deadlineMs && Date.now() > deadlineMs - 3000) {
+    throw new Error('Pipeline deadline approached before synthesis');
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext, sourcesContext);
+  const { agentBlock, failedAgents } = formatAgentResultsLegacy(agentResults);
+  const consolidatedSources = dedupeSources(agentResults);
+  const userMessage = buildUserMessage(userQuery, agentBlock, consolidatedSources, failedAgents);
+  const queue = new AsyncTextQueue();
+
+  const streamPromise = callClaudeStream(
+    {
+      model: CLAUDE_HAIKU,
+      systemPrompt,
+      userMessage,
+      maxTokens: 8192,
+      temperature: 1,
+    },
+    (chunk) => {
+      queue.push(chunk);
+    }
+  );
+
+  void streamPromise.then(
+    () => queue.close(),
+    (error) => queue.fail(error)
+  );
+
   try {
     while (true) {
-      const { done, value } = await readWithTimeout(reader, SYNTHESIS_STREAM_IDLE_TIMEOUT_MS);
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n');
-      buffer = parts.pop() ?? '';
-      for (const line of parts) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-          const data = JSON.parse(payload) as GeminiStreamChunk;
-          const parts2 = data.candidates?.[0]?.content?.parts ?? [];
-          for (const p of parts2) {
-            if (typeof p.text === 'string' && p.text.length > 0) {
-              yield p.text;
-            }
-          }
-        } catch {
-          // ignore malformed chunk
-        }
-      }
+      const next = await queue.next();
+      if (next.done) break;
+      yield next.value;
     }
-  } catch (err) {
-    console.error('[synthesizer] Stream read failed', err);
-    await reader.cancel().catch(() => {});
-    if ((err as GeminiStreamError).status) {
-      throw err;
-    }
-    throw buildStreamError(504, err instanceof Error ? err.message : 'Stream read failed');
-  } finally {
-    reader.releaseLock();
+    await streamPromise;
+  } catch (error) {
+    queue.fail(error);
+    throw error;
   }
 }

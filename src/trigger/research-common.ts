@@ -1,4 +1,5 @@
 import { metadata } from '@trigger.dev/sdk/v3';
+import { CLAUDE_SONNET } from '@/lib/claude/client';
 import { runResearchAgent, safeAgentError } from '@/lib/agents/executor';
 import type { AgentContext } from '@/lib/memory/context-builder';
 import type { AgentResult, AgentSource } from '@/lib/agents/types';
@@ -83,7 +84,7 @@ function buildStageMessage(
     case 'generating':
       return 'Generating report...';
     case 'complete':
-      return 'Report ready.';
+      return 'Research complete.';
     case 'error':
     default:
       return 'Research failed.';
@@ -96,8 +97,10 @@ function setProgressMetadata(
   stage: TriggerResearchStage,
   elapsedMs: number
 ): void {
+  const message = buildStageMessage(stage, name, payload);
   metadata.set('agentStatus', stage);
-  metadata.set('agentStatusMessage', buildStageMessage(stage, name, payload));
+  metadata.set('agentStatusMessage', message);
+  metadata.set('stage', message);
   metadata.set('geminiElapsedMs', elapsedMs);
   metadata.set('elapsedMs', elapsedMs);
 }
@@ -105,16 +108,17 @@ function setProgressMetadata(
 export async function runTriggeredResearchTask(
   name: TriggerResearchToolName,
   payload: TriggerResearchPayload,
-  model: AgentResult['model']
+  model: AgentResult['model'] = CLAUDE_SONNET
 ): Promise<TriggerResearchOutput> {
   metadata.set('status', 'running');
   metadata.set('toolName', name);
   metadata.set('userId', payload.userId);
+  metadata.set('model', model);
 
   const geminiStarted = Date.now();
   metadata.set('geminiStarted', geminiStarted);
   setProgressMetadata(name, payload, 'searching', 0);
-  console.info(`[trigger:${name}] Gemini call started`, {
+  console.info(`[trigger:${name}] Claude call started`, {
     startedAt: new Date(geminiStarted).toISOString(),
     startedAtMs: geminiStarted,
     model,
@@ -123,7 +127,7 @@ export async function runTriggeredResearchTask(
   const progressInterval = setInterval(() => {
     const elapsedMs = Date.now() - geminiStarted;
     setProgressMetadata(name, payload, stageForElapsed(elapsedMs), elapsedMs);
-  }, 5_000);
+  }, 5000);
 
   try {
     const result = await runResearchAgent({
@@ -131,10 +135,8 @@ export async function runTriggeredResearchTask(
       args: payload.args,
       context: payload.context,
       model,
-      thinkingLevel: 'medium',
-      maxOutputTokens: 32768,
-      // Trigger runs do not share Vercel's 60s ceiling, so give 3.1 Pro room
-      // to finish and avoid multiplying retries inside task-level retries.
+      thinkingLevel: payload.deep ? 'high' : 'medium',
+      maxOutputTokens: payload.deep ? 32768 : 16384,
       requestTimeoutMs: 600000,
       maxRetries: 0,
       throwOnError: true,
@@ -143,14 +145,19 @@ export async function runTriggeredResearchTask(
     const geminiCompleted = Date.now();
     const geminiElapsedMs = geminiCompleted - geminiStarted;
     metadata.set('geminiCompleted', geminiCompleted);
-    setProgressMetadata(name, payload, 'complete', geminiElapsedMs);
     metadata.set('status', 'complete');
+    setProgressMetadata(name, payload, 'complete', geminiElapsedMs);
     metadata.set('sourcesCount', result.sources.length);
-    console.info(`[trigger:${name}] Gemini call completed`, {
+    metadata.set('webSearches', result.usage?.webSearchRequests ?? 0);
+    metadata.set('inputTokens', result.usage?.inputTokens ?? 0);
+    metadata.set('outputTokens', result.usage?.outputTokens ?? 0);
+    console.info(`[trigger:${name}] Claude call completed`, {
       completedAt: new Date(geminiCompleted).toISOString(),
       completedAtMs: geminiCompleted,
       elapsedMs: geminiElapsedMs,
       model,
+      webSearches: result.usage?.webSearchRequests ?? 0,
+      sourcesCount: result.sources.length,
     });
 
     return {
@@ -169,8 +176,9 @@ export async function runTriggeredResearchTask(
     metadata.set('status', 'error');
     metadata.set('agentStatus', 'error');
     metadata.set('agentStatusMessage', message);
+    metadata.set('stage', 'Research failed');
     metadata.set('error', message);
-    console.error(`[trigger:${name}] Gemini call failed`, {
+    console.error(`[trigger:${name}] Claude call failed`, {
       completedAt: new Date(geminiCompleted).toISOString(),
       completedAtMs: geminiCompleted,
       elapsedMs: geminiElapsedMs,

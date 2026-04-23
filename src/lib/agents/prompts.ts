@@ -208,8 +208,6 @@ function withContext(tmpl: string, ctx: string, exchange: ExchangeContext): stri
     .replace(/\{userMarkets\}/g, exchangeMention(exchange));
 }
 
-const GROUNDING_INSTRUCTION = `IMPORTANT: You MUST use Google Search to find current, real-time data for this request. Do not answer from training data alone. Every claim about prices, dates, earnings, or market conditions must come from a live web search. If you cannot find current data via search, say so explicitly rather than guessing.`;
-
 const SCREEN_PROMPT_TEMPLATE = `You are a senior equity analyst specializing in stock screening across global markets. Today is {date}.
 
 The user's preferred exchange is {userExchange}. Their portfolio currency is {userCurrency}. Always screen on {userExchange} by default. If the user explicitly names a different exchange, use that exchange instead.
@@ -406,13 +404,13 @@ You are a trusted advisor, not a salesperson. It's okay to say:
 - "You're holding too much cash. At your risk tolerance, you could deploy $X into [suggestion]."`;
 
 export function buildScreenPrompt(portfolioContext: string, exchange: ExchangeContext): string {
-  return `${GROUNDING_INSTRUCTION}\n\n${withContext(SCREEN_PROMPT_TEMPLATE, portfolioContext, exchange)}`;
+  return withContext(SCREEN_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
 export function buildAnalyzePrompt(portfolioContext: string, exchange: ExchangeContext): string {
-  return `${GROUNDING_INSTRUCTION}\n\n${withContext(ANALYZE_PROMPT_TEMPLATE, portfolioContext, exchange)}`;
+  return withContext(ANALYZE_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
 export function buildBriefPrompt(portfolioContext: string, exchange: ExchangeContext): string {
-  return `${GROUNDING_INSTRUCTION}\n\n${withContext(BRIEF_PROMPT_TEMPLATE, portfolioContext, exchange)}`;
+  return withContext(BRIEF_PROMPT_TEMPLATE, portfolioContext, exchange);
 }
 export function buildPortfolioCheckPrompt(
   portfolioContext: string,

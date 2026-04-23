@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
+import { callClaude, CLAUDE_HAIKU, parseClaudeJson } from '@/lib/claude/client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SessionSummaryRecord } from './types';
 
@@ -70,17 +70,17 @@ export async function summarizeSession(
   let sentiment: SentimentValue | null = null;
 
   try {
-    const result = await callGeminiV2WithRetry({
-      model: GEMINI_MODEL,
+    const result = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt: 'You summarize financial advisory conversations. Output only valid JSON.',
       userMessage: `${SESSION_SUMMARY_PROMPT}\n\nConversation:\n${formatted}`,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 512,
-      responseMimeType: 'application/json',
+      useWebSearch: false,
+      maxTokens: 512,
+      thinkingBudget: 0,
+      temperature: 1,
     });
 
-    const parsed: unknown = JSON.parse(result.text.trim());
+    const parsed = parseClaudeJson<unknown>(result.text);
     if (typeof parsed === 'object' && parsed !== null) {
       const obj = parsed as Record<string, unknown>;
       summary = String(obj.summary ?? '').slice(0, 500);

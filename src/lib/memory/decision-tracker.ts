@@ -1,4 +1,4 @@
-import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
+import { callClaude, CLAUDE_HAIKU, parseClaudeJson } from '@/lib/claude/client';
 import { fetchPricesForTickers } from '@/lib/prices/server-fetch';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Decision, DecisionType, DecisionConfidence, OutcomeStatus } from './types';
@@ -103,17 +103,17 @@ export async function extractDecisions(
   let rawDecisions: RawDecision[] = [];
 
   try {
-    const result = await callGeminiV2WithRetry({
-      model: GEMINI_MODEL,
+    const result = await callClaude({
+      model: CLAUDE_HAIKU,
       systemPrompt: 'You extract actionable investment recommendations from financial advisor responses. Output only valid JSON.',
       userMessage: `${DECISION_EXTRACTION_PROMPT}\n\nResponse to analyze:\n${response.slice(0, 3000)}`,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json',
+      useWebSearch: false,
+      maxTokens: 2048,
+      thinkingBudget: 0,
+      temperature: 1,
     });
 
-    const parsed: unknown = JSON.parse(result.text.trim());
+    const parsed = parseClaudeJson<unknown>(result.text);
     if (Array.isArray(parsed)) {
       rawDecisions = parsed.filter(
         (item): item is RawDecision => typeof item === 'object' && item !== null

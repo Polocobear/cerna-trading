@@ -1,4 +1,5 @@
 import { task } from '@trigger.dev/sdk/v3';
+import { CLAUDE_SONNET } from '@/lib/claude/client';
 import {
   runTriggeredResearchTask,
   type TriggerResearchPayload,
@@ -10,6 +11,6 @@ export const researchAnalyzeTask = task({
     maxAttempts: 1,
   },
   run: async (payload: TriggerResearchPayload) => {
-    return runTriggeredResearchTask('analyze_stock', payload, 'gemini-3.1-pro-preview');
+    return runTriggeredResearchTask('analyze_stock', payload, CLAUDE_SONNET);
   },
 });
