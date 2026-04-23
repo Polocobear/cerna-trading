@@ -14,12 +14,18 @@ export async function POST(req: NextRequest) {
 
     const { args, context, deep } = await req.json();
 
-    const handle = await tasks.trigger<typeof researchScreenTask>('research-screen', {
-      userId: user.id,
-      args,
-      context,
-      deep: !!deep,
-    });
+    const handle = await tasks.trigger<typeof researchScreenTask>(
+      'research-screen',
+      {
+        userId: user.id,
+        args,
+        context,
+        deep: !!deep,
+      },
+      {
+        ttl: '1h',
+      }
+    );
     const publicAccessToken = await auth.createPublicToken({
       scopes: {
         read: {
