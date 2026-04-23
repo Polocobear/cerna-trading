@@ -181,7 +181,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       handles: PendingTriggerHandle[],
       signal: AbortSignal
     ): Promise<Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }>> => {
-      const MAX_WAIT_MS = 120000;
+      const MAX_WAIT_MS = 300000;
       const POLL_INTERVAL_MS = 2000;
       const pending = new Map(handles.map((handle) => [handle.runId, handle]));
       const results: Array<{ name: string; success: boolean; content: string | null; sources: Source[]; error?: string }> = [];

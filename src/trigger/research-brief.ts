@@ -7,7 +7,7 @@ import {
 export const researchBriefTask = task({
   id: 'research-brief',
   retry: {
-    maxAttempts: 2,
+    maxAttempts: 1,
   },
   run: async (payload: TriggerResearchPayload) => {
     return runTriggeredResearchTask('brief_market', payload, 'gemini-3.1-pro-preview');

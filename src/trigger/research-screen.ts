@@ -7,7 +7,7 @@ import {
 export const researchScreenTask = task({
   id: 'research-screen',
   retry: {
-    maxAttempts: 2,
+    maxAttempts: 1,
   },
   run: async (payload: TriggerResearchPayload) => {
     return runTriggeredResearchTask('screen_stocks', payload, 'gemini-3.1-pro-preview');
