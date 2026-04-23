@@ -37,8 +37,10 @@ export async function runTriggeredResearchTask(
       model,
       thinkingLevel: 'medium',
       maxOutputTokens: 32768,
-      requestTimeoutMs: 90000,
-      maxRetries: 1,
+      // Trigger runs do not share Vercel's 60s ceiling, so give 3.1 Pro room
+      // to finish and avoid multiplying retries inside task-level retries.
+      requestTimeoutMs: 120000,
+      maxRetries: 0,
       throwOnError: true,
     });
 
