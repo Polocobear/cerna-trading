@@ -1,15 +1,20 @@
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 12000;
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 25000;
 const DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS = 10000;
-export const GEMINI_PRO = 'gemini-3.1-pro-preview' as const;
-export const GEMINI_FLASH = 'gemini-3-flash-preview' as const;
+const DEADLINE_BUFFER_MS = 2000;
+const MIN_DEADLINE_REMAINING_MS = 3000;
 
-// Tiered model routing (legacy callGemini):
-// STANDARD: Gemini 2.5 Pro — free tier (1,500 RPD), strong reasoning
-// DEEP:     Gemini 3.1 Pro — paid frontier reasoning for deep analysis
+// gemini-3-flash-preview: fast enough for Vercel Hobby and strong enough for
+// Cerna's research prompts. Do not add a Pro fallback on this runtime.
+export const GEMINI_MODEL = 'gemini-3-flash-preview' as const;
+
+let didLogGroundedResponseShape = false;
+
+// Tiered model routing for the legacy /api/chat path. Both tiers map to the
+// same model so old callers still work without reintroducing slow models.
 const MODELS = {
-  standard: GEMINI_FLASH,
-  deep: GEMINI_PRO,
+  standard: GEMINI_MODEL,
+  deep: GEMINI_MODEL,
 } as const;
 
 export type ModelTier = keyof typeof MODELS;
@@ -38,10 +43,13 @@ export interface GeminiGroundingMetadata {
   groundingChunks?: GeminiGroundingChunk[];
   groundingSupports?: GeminiGroundingSupport[];
   webSearchQueries?: string[];
+  searchEntryPoint?: {
+    renderedContent?: string;
+  };
 }
 
 /**
- * Legacy callGemini used by /api/chat. Streams 2.5/3.1 Pro with search grounding.
+ * Legacy callGemini used by /api/chat.
  * Kept intact for backward compatibility.
  */
 export async function callGemini(request: GeminiRequest): Promise<Response> {
@@ -61,11 +69,11 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
       parts: [{ text: request.systemPrompt }],
     },
     contents,
-    tools: [{ googleSearch: {} }],
+    tools: [{ google_search: {} }],
     generationConfig: {
       temperature: 1.0,
       thinkingConfig: {
-        thinkingLevel: tier === 'deep' ? 'medium' : 'low',
+        thinkingLevel: 'low',
       },
       maxOutputTokens: tier === 'deep' ? 8192 : 4096,
     },
@@ -73,17 +81,22 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
 
   const url = `${GEMINI_API_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
-  return callWithRetry(() =>
-    fetchWithTimeout(
-      url,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      },
-      DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
-      model
-    )
+  return callWithRetry(
+    (timeoutMs) =>
+      fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        timeoutMs,
+        model
+      ),
+    {
+      model,
+      requestTimeoutMs: DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
+    }
   );
 }
 
@@ -91,7 +104,7 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
 // v2 API used by the Phase 7B agent backend.
 // =============================================================================
 
-export type GeminiV2Model = typeof GEMINI_PRO | typeof GEMINI_FLASH;
+export type GeminiV2Model = typeof GEMINI_MODEL;
 export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
 export interface GeminiSchema {
@@ -131,7 +144,6 @@ export interface GeminiV2Options {
   retryOptions?: {
     maxRetries?: number;
     backoffMs?: number;
-    downgradeModel?: string;
     deadlineMs?: number;
   };
 }
@@ -144,7 +156,7 @@ export interface GeminiV2FunctionCall {
 export interface GeminiV2NonStreamResult {
   text: string;
   functionCalls: GeminiV2FunctionCall[];
-  sources: Array<{ title: string; url: string; domain: string }>;
+  sources: Array<{ title: string; url: string; domain: string; snippet?: string }>;
   raw: unknown;
 }
 
@@ -160,6 +172,15 @@ interface GeminiCandidate {
 
 interface GeminiResponseJson {
   candidates?: GeminiCandidate[];
+  groundingMetadata?: GeminiGroundingMetadata;
+}
+
+interface RetryOptions {
+  maxRetries?: number;
+  backoffMs?: number;
+  deadlineMs?: number;
+  requestTimeoutMs?: number;
+  model: string;
 }
 
 function domainOf(url: string): string {
@@ -216,26 +237,37 @@ async function fetchWithTimeout(
   }
 }
 
-export async function callWithRetry(
-  fn: () => Promise<Response>,
-  options?: {
-    maxRetries?: number;
-    backoffMs?: number;
-    downgradeModel?: string;
-    deadlineMs?: number;
+function resolveRequestTimeoutMs(
+  model: string,
+  requestTimeoutMs: number,
+  deadlineMs?: number
+): number {
+  if (!deadlineMs) return requestTimeoutMs;
+
+  const remaining = deadlineMs - Date.now();
+  if (remaining <= MIN_DEADLINE_REMAINING_MS) {
+    throw buildGeminiError(model, 504, 'Deadline exceeded - insufficient time for Gemini call');
   }
+
+  return Math.min(requestTimeoutMs, Math.max(1000, remaining - DEADLINE_BUFFER_MS));
+}
+
+export async function callWithRetry(
+  fn: (timeoutMs: number) => Promise<Response>,
+  options?: RetryOptions
 ): Promise<Response> {
   const maxRetries = options?.maxRetries ?? 2;
   const backoffMs = options?.backoffMs ?? 2000;
   const deadline = options?.deadlineMs;
+  const requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_GEMINI_REQUEST_TIMEOUT_MS;
+  const model = options?.model ?? GEMINI_MODEL;
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    if (deadline && Date.now() > deadline - 3000) {
-      return fn();
-    }
+    const timeoutMs = resolveRequestTimeoutMs(model, requestTimeoutMs, deadline);
+
     try {
-      const res = await fn();
+      const res = await fn(timeoutMs);
 
       if (res.ok) return res;
 
@@ -255,14 +287,22 @@ export async function callWithRetry(
     }
   }
 
-  throw (lastError instanceof Error
-    ? lastError
-    : new Error('The AI service encountered a temporary error. Please try again.'));
+  throw (
+    lastError instanceof Error
+      ? lastError
+      : new Error('The AI service encountered a temporary error. Please try again.')
+  );
 }
 
 export function sanitizeGeminiError(status: number, rawText: string): string {
   const normalized = rawText.toLowerCase();
 
+  if (
+    normalized.includes('deadline exceeded') ||
+    normalized.includes('insufficient time for gemini call')
+  ) {
+    return 'The request ran out of time before the AI call could finish. Please try again.';
+  }
   if (
     status === 408 ||
     status === 504 ||
@@ -285,18 +325,18 @@ function buildV2Body(opts: GeminiV2Options): Record<string, unknown> {
     opts.messages ??
     (opts.userMessage !== undefined ? [{ role: 'user', content: opts.userMessage }] : []);
 
-  const contents = messages.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
+  const contents = messages.map((message) => ({
+    role: message.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: message.content }],
   }));
 
-  // Gemini disallows mixing googleSearch with functionDeclarations in the same
+  // Gemini disallows mixing google_search with functionDeclarations in the same
   // request. Caller must choose one. Orchestrator uses tools; agents use search.
   const tools: Array<Record<string, unknown>> = [];
   if (opts.tools && opts.tools.length > 0) {
     tools.push({ functionDeclarations: opts.tools });
   } else if (opts.enableSearchGrounding) {
-    tools.push({ googleSearch: {} });
+    tools.push({ google_search: {} });
   }
 
   const generationConfig: Record<string, unknown> = {
@@ -322,14 +362,91 @@ function buildV2Body(opts: GeminiV2Options): Record<string, unknown> {
   return body;
 }
 
+function maybeLogGroundedResponseShape(
+  response: GeminiResponseJson,
+  enableSearchGrounding: boolean
+): void {
+  if (!enableSearchGrounding || process.env.NODE_ENV !== 'development' || didLogGroundedResponseShape) {
+    return;
+  }
+
+  didLogGroundedResponseShape = true;
+  const candidate = response.candidates?.[0];
+
+  console.log('[GEMINI] Full grounded response keys:', JSON.stringify(Object.keys(response)));
+  if (candidate) {
+    console.log('[GEMINI] Candidate keys:', JSON.stringify(Object.keys(candidate)));
+    if (candidate.groundingMetadata) {
+      console.log(
+        '[GEMINI] Candidate grounding keys:',
+        JSON.stringify(Object.keys(candidate.groundingMetadata))
+      );
+    }
+  }
+  if (response.groundingMetadata) {
+    console.log(
+      '[GEMINI] Top-level grounding keys:',
+      JSON.stringify(Object.keys(response.groundingMetadata))
+    );
+  }
+}
+
+function extractSourcesFromGroundingMetadata(
+  groundingMetadata?: GeminiGroundingMetadata
+): Array<{ title: string; url: string; domain: string; snippet?: string }> {
+  if (!groundingMetadata) return [];
+
+  const snippetsByIndex = new Map<number, string>();
+  for (const support of groundingMetadata.groundingSupports ?? []) {
+    const snippet = support.segment?.text?.slice(0, 150);
+    if (!snippet) continue;
+    for (const index of support.groundingChunkIndices ?? []) {
+      if (!snippetsByIndex.has(index)) snippetsByIndex.set(index, snippet);
+    }
+  }
+
+  return (groundingMetadata.groundingChunks ?? [])
+    .map((chunk, index) => {
+      if (!chunk.web?.uri) return null;
+      return {
+        title: chunk.web.title ?? '',
+        url: chunk.web.uri,
+        domain: domainOf(chunk.web.uri),
+        snippet: snippetsByIndex.get(index),
+      };
+    })
+    .filter((source): source is NonNullable<typeof source> => source !== null);
+}
+
+function extractSources(
+  response: GeminiResponseJson
+): Array<{ title: string; url: string; domain: string; snippet?: string }> {
+  const deduped = new Map<string, { title: string; url: string; domain: string; snippet?: string }>();
+  const extracted = [
+    ...extractSourcesFromGroundingMetadata(response.groundingMetadata),
+    ...(response.candidates ?? []).flatMap((candidate) =>
+      extractSourcesFromGroundingMetadata(candidate.groundingMetadata)
+    ),
+  ];
+
+  for (const source of extracted) {
+    if (!source.url || deduped.has(source.url)) continue;
+    deduped.set(source.url, source);
+  }
+
+  return Array.from(deduped.values());
+}
+
 export async function callGeminiV2Stream(opts: GeminiV2Options): Promise<Response> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+
   const url = `${GEMINI_API_BASE}/models/${opts.model}:streamGenerateContent?alt=sse&key=${apiKey}`;
   const body = JSON.stringify(buildV2Body(opts));
+
   try {
     return await callWithRetry(
-      () =>
+      (timeoutMs) =>
         fetchWithTimeout(
           url,
           {
@@ -337,10 +454,14 @@ export async function callGeminiV2Stream(opts: GeminiV2Options): Promise<Respons
             headers: { 'Content-Type': 'application/json' },
             body,
           },
-          opts.requestTimeoutMs ?? DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
+          timeoutMs,
           opts.model
         ),
-      opts.retryOptions
+      {
+        ...opts.retryOptions,
+        model: opts.model,
+        requestTimeoutMs: opts.requestTimeoutMs ?? DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS,
+      }
     );
   } catch (err) {
     if ((err as GeminiError).status) {
@@ -350,19 +471,25 @@ export async function callGeminiV2Stream(opts: GeminiV2Options): Promise<Respons
       model: opts.model,
       error: err instanceof Error ? err.message : String(err),
     });
-    throw buildGeminiError(opts.model, 504, err instanceof Error ? err.message : 'Stream request failed');
+    throw buildGeminiError(
+      opts.model,
+      504,
+      err instanceof Error ? err.message : 'Stream request failed'
+    );
   }
 }
 
 export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonStreamResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
+
   const url = `${GEMINI_API_BASE}/models/${opts.model}:generateContent?key=${apiKey}`;
   const body = JSON.stringify(buildV2Body(opts));
+
   let res: Response;
   try {
     res = await callWithRetry(
-      () =>
+      (timeoutMs) =>
         fetchWithTimeout(
           url,
           {
@@ -370,10 +497,14 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
             headers: { 'Content-Type': 'application/json' },
             body,
           },
-          opts.requestTimeoutMs ?? DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
+          timeoutMs,
           opts.model
         ),
-      opts.retryOptions
+      {
+        ...opts.retryOptions,
+        model: opts.model,
+        requestTimeoutMs: opts.requestTimeoutMs ?? DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
+      }
     );
   } catch (err) {
     if ((err as GeminiError).status) {
@@ -385,6 +516,7 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
     });
     throw buildGeminiError(opts.model, 504, err instanceof Error ? err.message : 'Request failed');
   }
+
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     console.error('[Gemini] Non-OK response', {
@@ -394,11 +526,15 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
     });
     throw buildGeminiError(opts.model, res.status, text);
   }
+
   const json = (await res.json()) as GeminiResponseJson;
+  maybeLogGroundedResponseShape(json, Boolean(opts.enableSearchGrounding));
+
   const candidate = json.candidates?.[0];
   const parts: GeminiCandidatePart[] = candidate?.content?.parts ?? [];
   let text = '';
   const functionCalls: GeminiV2FunctionCall[] = [];
+
   for (const part of parts) {
     if (typeof part.text === 'string') text += part.text;
     if (part.functionCall?.name) {
@@ -408,22 +544,8 @@ export async function callGeminiV2(opts: GeminiV2Options): Promise<GeminiV2NonSt
       });
     }
   }
-  const grounding = candidate?.groundingMetadata;
-  const chunks = grounding?.groundingChunks ?? [];
-  const supports = grounding?.groundingSupports ?? [];
 
-  const sources = chunks
-    .map((c, i) => {
-      if (!c.web?.uri) return null;
-      const support = supports.find(s => s.groundingChunkIndices?.includes(i));
-      return {
-        title: c.web?.title ?? '',
-        url: c.web?.uri ?? '',
-        domain: domainOf(c.web?.uri ?? ''),
-        snippet: support?.segment?.text ? support.segment.text.slice(0, 150) : undefined,
-      };
-    })
-    .filter((s): s is NonNullable<typeof s> => s !== null);
+  const sources = extractSources(json);
   return { text, functionCalls, sources, raw: json };
 }
 

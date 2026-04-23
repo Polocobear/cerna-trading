@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service';
-import { callGeminiV2WithRetry, GEMINI_FLASH } from '@/lib/gemini/client';
+import { callGeminiV2WithRetry, GEMINI_MODEL } from '@/lib/gemini/client';
 import { fetchPricesForTickers } from '@/lib/prices/server-fetch';
 import type { AlertType, AlertPriority } from '@/lib/memory/types';
 
@@ -272,7 +272,7 @@ export async function generateAlerts(userId: string): Promise<number> {
     try {
       const tickerList = topHoldings.map((p) => p.ticker).join(', ');
       const earningsResult = await callGeminiV2WithRetry({
-        model: GEMINI_FLASH,
+        model: GEMINI_MODEL,
         systemPrompt: 'You check upcoming earnings dates for stocks. Output only valid JSON. Be concise.',
         userMessage: `Which of these stocks have earnings reports within the next 5 trading days (from today ${new Date().toISOString().split('T')[0]})? Stocks: ${tickerList}\n\nRespond ONLY with JSON: [{"ticker": "XYZ", "earnings_date": "YYYY-MM-DD", "eps_estimate": "...", "note": "..."}]\nReturn empty array [] if none have upcoming earnings.`,
         temperature: 1.0,

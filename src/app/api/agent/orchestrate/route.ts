@@ -16,9 +16,11 @@ export async function POST(req: NextRequest) {
     if (!message) return NextResponse.json({ error: 'Missing message' }, { status: 400 });
 
     const context = await buildContext(supabase, user.id, sessionId);
+    const deadlineMs = Date.now() + 25000;
     const result = await runOrchestrator(message, {
       exchangeCtx: context.exchangeCtx,
       investmentStrategy: context.profile?.investment_strategy ?? null,
+      deadlineMs,
     });
 
     return NextResponse.json({

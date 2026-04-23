@@ -1,10 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   callGeminiV2,
-  GEMINI_FLASH,
-  GEMINI_PRO,
+  GEMINI_MODEL,
   sanitizeGeminiError,
-  type GeminiV2Model,
 } from '@/lib/gemini/client';
 import {
   buildAnalyzePrompt,
@@ -310,12 +308,12 @@ export async function runAgent(options: {
         success: false,
         content: null,
         sources: [],
-        model: GEMINI_FLASH,
+        model: GEMINI_MODEL,
         error: 'Missing log_trade dependencies',
       };
     }
     const logRes = await handleLogTrade(args, supabase, userId, userMessage, context.exchangeCtx);
-    return { name, model: GEMINI_FLASH, ...logRes };
+    return { name, model: GEMINI_MODEL, ...logRes };
   }
 
   const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
@@ -323,70 +321,45 @@ export async function runAgent(options: {
 
   const isResearch = agent !== 'portfolio';
   const enableSearch = isResearch;
-  const primaryModel: GeminiV2Model = agent === 'portfolio' ? GEMINI_FLASH : GEMINI_PRO;
-  const fallbackModel: GeminiV2Model = GEMINI_FLASH;
-  const thinking_level = agent === 'portfolio' ? 'low' : 'medium';
+  const requestTimeoutMs = enableSearch ? 25000 : 12000;
 
-  const tryGemini = async (model: GeminiV2Model) => {
-    return callGeminiV2({
-      model,
+  const tryGemini = async () =>
+    callGeminiV2({
+      model: GEMINI_MODEL,
       systemPrompt,
       userMessage: promptUserMessage,
       enableSearchGrounding: enableSearch,
       temperature: 1.0,
-      thinking_level,
-      maxOutputTokens: model === GEMINI_PRO ? 32768 : 8192,
-      requestTimeoutMs: enableSearch ? 30000 : 12000,
+      thinking_level: 'low',
+      maxOutputTokens: enableSearch ? 32768 : 8192,
+      requestTimeoutMs,
       retryOptions: {
         maxRetries: enableSearch ? 0 : 1,
         backoffMs: 1000,
         deadlineMs,
       },
     });
-  };
 
   try {
     if (Date.now() > deadlineMs - 5000) {
       throw new Error('Pipeline deadline approached before execution');
     }
 
-    const res = await tryGemini(primaryModel);
+    const res = await tryGemini();
     return {
       name,
       success: true,
       content: res.text,
       sources: res.sources,
-      model: primaryModel,
+      model: GEMINI_MODEL,
     };
   } catch (err) {
-    if (primaryModel === GEMINI_PRO && Date.now() <= deadlineMs - 10000) {
-      try {
-        const res = await tryGemini(fallbackModel);
-        return {
-          name,
-          success: true,
-          content: res.text,
-          sources: res.sources,
-          model: fallbackModel,
-        };
-      } catch (fallbackErr) {
-        return {
-          name,
-          success: false,
-          content: null,
-          sources: [],
-          model: fallbackModel,
-          error: safeAgentError(fallbackErr),
-        };
-      }
-    }
-
     return {
       name,
       success: false,
       content: null,
       sources: [],
-      model: primaryModel,
+      model: GEMINI_MODEL,
       error: safeAgentError(err),
     };
   }
@@ -470,7 +443,7 @@ export async function executeAgents(
         data: '',
         sources: [],
         executionTime: 0,
-        model: GEMINI_FLASH,
+        model: GEMINI_MODEL,
         error: safeAgentError(s.reason),
       });
     }

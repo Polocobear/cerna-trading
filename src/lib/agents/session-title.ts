@@ -1,4 +1,4 @@
-import { callGeminiV2, GEMINI_FLASH } from '@/lib/gemini/client';
+import { callGeminiV2, GEMINI_MODEL } from '@/lib/gemini/client';
 import { buildSessionTitlePrompt } from './prompts';
 
 /**
@@ -17,7 +17,7 @@ export async function generateSessionTitle(
   try {
     const body = `User: ${userMessage.slice(0, 400)}\n\nAssistant: ${assistantResponse.slice(0, 400)}`;
     const res = await callGeminiV2({
-      model: GEMINI_FLASH,
+      model: GEMINI_MODEL,
       systemPrompt: buildSessionTitlePrompt(),
       userMessage: body,
       temperature: 1.0,
