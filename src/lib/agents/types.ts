@@ -4,7 +4,7 @@
 
 export type AgentName = 'screen' | 'analyze' | 'brief' | 'portfolio' | 'trade_log';
 
-export type AgentModel = 'gemini-3-flash-preview';
+export type AgentModel = 'gemini-3-flash-preview' | 'gemini-3.1-pro-preview';
 
 export interface AgentSource {
   title: string;

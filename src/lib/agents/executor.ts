@@ -1,8 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   callGeminiV2,
+  GEMINI_FLASH_MODEL,
   GEMINI_MODEL,
+  GEMINI_RESEARCH_MODEL,
   sanitizeGeminiError,
+  type GeminiThinkingLevel,
 } from '@/lib/gemini/client';
 import {
   buildAnalyzePrompt,
@@ -21,6 +24,8 @@ import type {
   AgentSource,
 } from './types';
 import type { AgentContext } from '@/lib/memory/context-builder';
+
+type ResearchToolName = 'screen_stocks' | 'analyze_stock' | 'brief_market';
 
 function classify(toolName: string): AgentName {
   switch (toolName) {
@@ -140,6 +145,10 @@ export function safeAgentError(err: unknown): string {
     return geminiError.message;
   }
   return 'unknown error';
+}
+
+function isResearchToolName(name: string): name is ResearchToolName {
+  return name === 'screen_stocks' || name === 'analyze_stock' || name === 'brief_market';
 }
 
 function formatMoney(n: number, currency: string): string {
@@ -281,6 +290,82 @@ async function handleLogTrade(
   };
 }
 
+export async function runResearchAgent(options: {
+  name: ResearchToolName;
+  args: Record<string, unknown>;
+  context: AgentContext;
+  model?: AgentResult['model'];
+  thinkingLevel?: GeminiThinkingLevel;
+  maxOutputTokens?: number;
+  requestTimeoutMs?: number;
+  deadlineMs?: number;
+  maxRetries?: number;
+  throwOnError?: boolean;
+}): Promise<{
+  name: ResearchToolName;
+  success: boolean;
+  content: string | null;
+  sources: AgentSource[];
+  model: AgentResult['model'];
+  error?: string;
+}> {
+  const {
+    name,
+    args,
+    context,
+    model = GEMINI_RESEARCH_MODEL,
+    thinkingLevel = 'medium',
+    maxOutputTokens = 32768,
+    requestTimeoutMs = 90000,
+    deadlineMs,
+    maxRetries = 1,
+    throwOnError = false,
+  } = options;
+
+  const agent = classify(name);
+  const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
+  const promptUserMessage = argsToUserMessage(name, args);
+
+  try {
+    const res = await callGeminiV2({
+      model,
+      systemPrompt,
+      userMessage: promptUserMessage,
+      enableSearchGrounding: true,
+      temperature: 1.0,
+      thinking_level: thinkingLevel,
+      maxOutputTokens,
+      requestTimeoutMs,
+      retryOptions: {
+        maxRetries,
+        backoffMs: 1000,
+        deadlineMs,
+      },
+    });
+
+    return {
+      name,
+      success: true,
+      content: res.text,
+      sources: res.sources,
+      model,
+    };
+  } catch (err) {
+    if (throwOnError) {
+      throw err;
+    }
+
+    return {
+      name,
+      success: false,
+      content: null,
+      sources: [],
+      model,
+      error: safeAgentError(err),
+    };
+  }
+}
+
 export async function runAgent(options: {
   name: string;
   args: Record<string, unknown>;
@@ -308,50 +393,57 @@ export async function runAgent(options: {
         success: false,
         content: null,
         sources: [],
-        model: GEMINI_MODEL,
+        model: GEMINI_FLASH_MODEL,
         error: 'Missing log_trade dependencies',
       };
     }
     const logRes = await handleLogTrade(args, supabase, userId, userMessage, context.exchangeCtx);
-    return { name, model: GEMINI_MODEL, ...logRes };
+    return { name, model: GEMINI_FLASH_MODEL, ...logRes };
+  }
+
+  if (isResearchToolName(name)) {
+    return runResearchAgent({
+      name,
+      args,
+      context,
+      model: GEMINI_FLASH_MODEL,
+      thinkingLevel: 'low',
+      maxOutputTokens: 32768,
+      requestTimeoutMs: 25000,
+      deadlineMs,
+      maxRetries: 0,
+    });
   }
 
   const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
   const promptUserMessage = argsToUserMessage(name, args);
-
-  const isResearch = agent !== 'portfolio';
-  const enableSearch = isResearch;
-  const requestTimeoutMs = enableSearch ? 25000 : 12000;
-
-  const tryGemini = async () =>
-    callGeminiV2({
-      model: GEMINI_MODEL,
-      systemPrompt,
-      userMessage: promptUserMessage,
-      enableSearchGrounding: enableSearch,
-      temperature: 1.0,
-      thinking_level: 'low',
-      maxOutputTokens: enableSearch ? 32768 : 8192,
-      requestTimeoutMs,
-      retryOptions: {
-        maxRetries: enableSearch ? 0 : 1,
-        backoffMs: 1000,
-        deadlineMs,
-      },
-    });
 
   try {
     if (Date.now() > deadlineMs - 5000) {
       throw new Error('Pipeline deadline approached before execution');
     }
 
-    const res = await tryGemini();
+    const res = await callGeminiV2({
+      model: GEMINI_FLASH_MODEL,
+      systemPrompt,
+      userMessage: promptUserMessage,
+      enableSearchGrounding: false,
+      temperature: 1.0,
+      thinking_level: 'low',
+      maxOutputTokens: 8192,
+      requestTimeoutMs: 12000,
+      retryOptions: {
+        maxRetries: 1,
+        backoffMs: 1000,
+        deadlineMs,
+      },
+    });
     return {
       name,
       success: true,
       content: res.text,
       sources: res.sources,
-      model: GEMINI_MODEL,
+      model: GEMINI_FLASH_MODEL,
     };
   } catch (err) {
     return {
@@ -359,7 +451,7 @@ export async function runAgent(options: {
       success: false,
       content: null,
       sources: [],
-      model: GEMINI_MODEL,
+      model: GEMINI_FLASH_MODEL,
       error: safeAgentError(err),
     };
   }

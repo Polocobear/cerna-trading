@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth, tasks } from '@trigger.dev/sdk/v3';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
-import { runAgent } from '@/lib/agents/executor';
+import type { researchAnalyzeTask } from '@/trigger/research-analyze';
 
-export const maxDuration = 60;
+export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
@@ -13,23 +14,28 @@ export async function POST(req: NextRequest) {
 
     const { args, context, deep } = await req.json();
 
-    const deadlineMs = Date.now() + 45000;
-    const result = await runAgent({
-      name: 'analyze_stock',
+    const handle = await tasks.trigger<typeof researchAnalyzeTask>('research-analyze', {
+      userId: user.id,
       args,
       context,
       deep: !!deep,
-      deadlineMs,
+    });
+    const publicAccessToken = await auth.createPublicToken({
+      scopes: {
+        read: {
+          runs: [handle.id],
+        },
+      },
+      expirationTime: '2h',
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      runId: handle.id,
+      publicAccessToken,
+      agentType: 'analyze',
+    });
   } catch (err) {
-    console.error('[agent/analyze] failed:', err);
-    return NextResponse.json({ 
-      success: false, 
-      content: null, 
-      error: 'Analyze agent failed',
-      sources: [],
-    }, { status: 200 }); 
+    console.error('[agent/analyze] failed to trigger:', err);
+    return NextResponse.json({ error: 'Failed to start analysis' }, { status: 500 });
   }
 }

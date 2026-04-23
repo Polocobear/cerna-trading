@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth, tasks } from '@trigger.dev/sdk/v3';
 import { createClient as createSupabaseServerClient } from '@/lib/supabase/server';
-import { runAgent } from '@/lib/agents/executor';
+import type { researchBriefTask } from '@/trigger/research-brief';
 
-export const maxDuration = 60;
+export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
@@ -13,23 +14,28 @@ export async function POST(req: NextRequest) {
 
     const { args, context, deep } = await req.json();
 
-    const deadlineMs = Date.now() + 45000;
-    const result = await runAgent({
-      name: 'brief_market',
+    const handle = await tasks.trigger<typeof researchBriefTask>('research-brief', {
+      userId: user.id,
       args,
       context,
       deep: !!deep,
-      deadlineMs,
+    });
+    const publicAccessToken = await auth.createPublicToken({
+      scopes: {
+        read: {
+          runs: [handle.id],
+        },
+      },
+      expirationTime: '2h',
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      runId: handle.id,
+      publicAccessToken,
+      agentType: 'brief',
+    });
   } catch (err) {
-    console.error('[agent/brief] failed:', err);
-    return NextResponse.json({ 
-      success: false, 
-      content: null, 
-      error: 'Brief agent failed',
-      sources: [],
-    }, { status: 200 }); 
+    console.error('[agent/brief] failed to trigger:', err);
+    return NextResponse.json({ error: 'Failed to start briefing' }, { status: 500 });
   }
 }

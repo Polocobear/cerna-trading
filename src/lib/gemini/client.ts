@@ -4,17 +4,18 @@ const DEFAULT_GEMINI_STREAM_CONNECT_TIMEOUT_MS = 10000;
 const DEADLINE_BUFFER_MS = 2000;
 const MIN_DEADLINE_REMAINING_MS = 3000;
 
-// gemini-3-flash-preview: fast enough for Vercel Hobby and strong enough for
-// Cerna's research prompts. Do not add a Pro fallback on this runtime.
-export const GEMINI_MODEL = 'gemini-3-flash-preview' as const;
+export const GEMINI_FLASH_MODEL = 'gemini-3-flash-preview' as const;
+export const GEMINI_RESEARCH_MODEL = 'gemini-3.1-pro-preview' as const;
+// Keep the historical export name for the Vercel-side default model.
+export const GEMINI_MODEL = GEMINI_FLASH_MODEL;
 
 let didLogGroundedResponseShape = false;
 
 // Tiered model routing for the legacy /api/chat path. Both tiers map to the
 // same model so old callers still work without reintroducing slow models.
 const MODELS = {
-  standard: GEMINI_MODEL,
-  deep: GEMINI_MODEL,
+  standard: GEMINI_FLASH_MODEL,
+  deep: GEMINI_FLASH_MODEL,
 } as const;
 
 export type ModelTier = keyof typeof MODELS;
@@ -104,7 +105,7 @@ export async function callGemini(request: GeminiRequest): Promise<Response> {
 // v2 API used by the Phase 7B agent backend.
 // =============================================================================
 
-export type GeminiV2Model = typeof GEMINI_MODEL;
+export type GeminiV2Model = typeof GEMINI_FLASH_MODEL | typeof GEMINI_RESEARCH_MODEL;
 export type GeminiThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 
 export interface GeminiSchema {
