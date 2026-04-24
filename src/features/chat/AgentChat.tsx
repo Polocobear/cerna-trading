@@ -1,18 +1,23 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Search, BarChart3, Newspaper, Wallet } from 'lucide-react';
 import type { ChatMessage } from '@/types/chat';
 import type { Position } from '@/types/portfolio';
-import { useAgentChat, type AgentStatus as HookAgentStatus, type AgentChatMessage } from '@/lib/agents/use-agent-chat';
+import {
+  useAgentChat,
+  type AgentStatus as HookAgentStatus,
+  type AgentChatMessage,
+  type Source,
+} from '@/lib/agents/use-agent-chat';
 import type { AgentName } from '@/lib/agents/types';
 import { useAlerts } from '@/lib/alerts/use-alerts';
 import { AlertBanner } from '@/features/alerts/AlertBanner';
-import { CitationCard } from './CitationCard';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
 import { SuggestionChips, getDefaultSuggestions } from './SuggestionChips';
 import { AgentStatusCard, type AgentStatus as UIAgentStatus } from './AgentStatusCard';
+import { SourceRail } from './SourceRail';
 
 interface AgentChatProps {
   sessionId: string;
@@ -53,12 +58,18 @@ function parseDraftState(raw: string | null): {
     const parsed = JSON.parse(raw) as unknown;
     const rawMessages = Array.isArray(parsed)
       ? parsed
-      : typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { messages?: unknown }).messages)
+      : typeof parsed === 'object' &&
+          parsed !== null &&
+          Array.isArray((parsed as { messages?: unknown }).messages)
         ? (parsed as { messages: unknown[] }).messages
         : [];
     const persistedIds =
-      typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { persistedIds?: unknown }).persistedIds)
-        ? (parsed as { persistedIds: unknown[] }).persistedIds.filter((value): value is string => typeof value === 'string')
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      Array.isArray((parsed as { persistedIds?: unknown }).persistedIds)
+        ? (parsed as { persistedIds: unknown[] }).persistedIds.filter(
+            (value): value is string => typeof value === 'string'
+          )
         : [];
 
     const messages = rawMessages
@@ -77,7 +88,10 @@ function parseDraftState(raw: string | null): {
         createdAt: item.createdAt as string,
         sources: Array.isArray(item.sources)
           ? item.sources
-              .filter((source): source is Record<string, unknown> => typeof source === 'object' && source !== null)
+              .filter(
+                (source): source is Record<string, unknown> =>
+                  typeof source === 'object' && source !== null
+              )
               .map((source) => ({
                 title: typeof source.title === 'string' ? source.title : '',
                 url: typeof source.url === 'string' ? source.url : '',
@@ -96,50 +110,70 @@ function parseDraftState(raw: string | null): {
   }
 }
 
-function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
+function normalizeCitation(citation: {
+  title?: string;
+  url: string;
+  domain?: string;
+  snippet?: string;
+}): Source {
   return {
-    id: m.id,
-    role: m.role,
-    content: m.content,
-    createdAt: m.created_at,
-    sources: (m.citations ?? []).map((c) => ({
-      title: c.title ?? '',
-      url: c.url,
-      domain: c.domain ?? (() => {
+    title: citation.title ?? '',
+    url: citation.url,
+    domain:
+      citation.domain ??
+      (() => {
         try {
-          return new URL(c.url).hostname.replace(/^www\./, '');
+          return new URL(citation.url).hostname.replace(/^www\./, '');
         } catch {
-          return c.url;
+          return citation.url;
         }
       })(),
-      snippet: c.snippet,
-    })),
+    snippet: citation.snippet,
+  };
+}
+
+function chatMessageToAgent(message: ChatMessage): AgentChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.created_at,
+    sources: (message.citations ?? []).map((citation) => normalizeCitation(citation)),
   };
 }
 
 function sanitizeAgentStatusNote(note?: string): string | undefined {
   if (!note) return undefined;
-  if (/Gemini/i.test(note) || /^\s*\d{3}\b/.test(note) || /request failed \(\d+\)/i.test(note)) {
+  if (
+    /Gemini/i.test(note) ||
+    /^\s*\d{3}\b/.test(note) ||
+    /request failed \(\d+\)/i.test(note)
+  ) {
     return 'Temporary error - retrying...';
   }
   return note;
 }
 
-function hookStatusToUi(s: HookAgentStatus): UIAgentStatus {
-  const state = s.status;
+function hookStatusToUi(status: HookAgentStatus): UIAgentStatus {
+  const state = status.status;
   const completionNote =
-    s.status === 'error'
-      ? sanitizeAgentStatusNote(s.error)
-      : s.summary;
+    status.status === 'error' ? sanitizeAgentStatusNote(status.error) : status.summary;
+
   return {
-    id: s.name,
-    name: AGENT_LABELS[s.name],
-    description: s.description,
-    Icon: AGENT_ICONS[s.name],
+    id: status.name,
+    name: AGENT_LABELS[status.name],
+    description: status.description,
+    Icon: AGENT_ICONS[status.name],
     state,
     completionNote,
-    sources: s.sources,
+    sources: status.sources,
   };
+}
+
+function extractElapsed(note?: string): string | null {
+  if (!note) return null;
+  const match = note.match(/\(([^()]*elapsed)\)\s*$/i);
+  return match?.[1]?.trim() ?? null;
 }
 
 export function AgentChat({
@@ -211,6 +245,7 @@ export function AgentChat({
       window.sessionStorage.removeItem(key);
       return;
     }
+
     window.sessionStorage.setItem(
       key,
       JSON.stringify({
@@ -285,9 +320,9 @@ export function AgentChat({
   }, [sessionTitle, onSessionTitle]);
 
   const scrollToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
   }, []);
 
   useEffect(() => {
@@ -295,9 +330,9 @@ export function AgentChat({
   }, [messages, agentStatuses, autoScroll, scrollToBottom]);
 
   function onScroll() {
-    const el = scrollRef.current;
-    if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const element = scrollRef.current;
+    if (!element) return;
+    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     setAutoScroll(atBottom);
   }
 
@@ -305,6 +340,46 @@ export function AgentChat({
     () => getDefaultSuggestions(positions, watchlist),
     [positions, watchlist]
   );
+
+  const researchProgress = useMemo(() => {
+    const totalAgents = agentStatuses.length;
+    const completedAgents = agentStatuses.filter(
+      (status) => status.status === 'complete' || status.status === 'error'
+    ).length;
+    const runningStatus = agentStatuses.find((status) => status.status === 'running');
+    const pendingCount = agentStatuses.filter((status) => status.status === 'pending').length;
+
+    if (phase === 'orchestrating') {
+      return {
+        title: 'Planning research',
+        subtitle: 'Choosing which specialist agents to run.',
+        elapsed: null as string | null,
+      };
+    }
+
+    if (phase === 'researching') {
+      return {
+        title:
+          completedAgents === 0
+            ? `Research in progress (${totalAgents} agent${totalAgents === 1 ? '' : 's'})`
+            : `Research in progress (${completedAgents}/${totalAgents} complete)`,
+        subtitle:
+          runningStatus?.summary ??
+          (pendingCount > 0 ? `${pendingCount} queued` : 'Searching, analyzing, and preparing findings.'),
+        elapsed: extractElapsed(runningStatus?.summary),
+      };
+    }
+
+    if (phase === 'synthesizing') {
+      return {
+        title: 'Writing final answer',
+        subtitle: 'Combining the specialist findings into one response.',
+        elapsed: null as string | null,
+      };
+    }
+
+    return null;
+  }, [agentStatuses, phase]);
 
   const handleSend = useCallback(
     async (text: string, sendDepth: 'standard' | 'deep') => {
@@ -342,12 +417,10 @@ export function AgentChat({
   }, [sendMessage]);
 
   const isEmpty = messages.length === 0 && phase === 'idle' && !isStreaming && !isLoading;
-
   const showAgentCards = agentStatuses.length > 0 && phase !== 'idle' && phase !== 'done';
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Proactive alerts above messages */}
+    <div className="flex h-full flex-col">
       <AlertBanner
         alerts={alerts}
         onDismiss={dismissAlert}
@@ -355,101 +428,106 @@ export function AgentChat({
         onAskAbout={handleAlertAsk}
       />
 
-      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto custom-scrollbar">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto custom-scrollbar"
+        style={{ scrollPaddingBottom: '14rem' }}
+      >
         {isEmpty ? (
-          <div className="min-h-full flex items-center justify-center px-4 py-10">
+          <div className="flex min-h-full items-center justify-center px-4 py-10">
             <div className="w-full max-w-[640px]">
-              <h1 className="text-[28px] font-semibold text-cerna-text-primary tracking-tight">
+              <h1 className="text-[28px] font-semibold tracking-tight text-cerna-text-primary">
                 What do you want to research?
               </h1>
-              <p className="text-[15px] text-[rgba(255,255,255,0.5)] mt-2">
-                I can screen stocks, analyze companies, brief you on markets, and check your portfolio.
+              <p className="mt-2 text-[15px] text-[rgba(255,255,255,0.5)]">
+                I can screen stocks, analyze companies, brief you on markets, and check your
+                portfolio.
               </p>
               <div className="mt-6">
                 <SuggestionChips
                   suggestions={suggestions}
-                  onSelect={(s) => void handleSend(s, depth)}
+                  onSelect={(suggestion) => void handleSend(suggestion, depth)}
                 />
               </div>
             </div>
           </div>
         ) : (
-          <div className="mx-auto max-w-[var(--chat-max-width)] px-4 py-6 space-y-6">
-            {messages.map((m, idx) => {
+          <div
+            className="mx-auto max-w-[var(--chat-max-width)] space-y-6 px-4 py-6"
+            style={{ paddingBottom: 'calc(14rem + env(safe-area-inset-bottom))' }}
+          >
+            {messages.map((message, index) => {
               const isLastAssistant =
-                m.role === 'assistant' && idx === messages.length - 1;
-              const showShimmer = isLastAssistant && m.content.length === 0;
+                message.role === 'assistant' && index === messages.length - 1;
+              const showShimmer = isLastAssistant && message.content.length === 0;
+
               return (
-                <div key={m.id} className="space-y-3">
+                <div key={message.id} className="space-y-3">
                   {isLastAssistant && showAgentCards && (
                     <div className="space-y-2">
-                      {(() => {
-                        const showTopLevel = phase === 'orchestrating' || phase === 'researching' || phase === 'synthesizing';
-                        if (!showTopLevel) return null;
-                        
-                        let text = '';
-                        if (phase === 'orchestrating') {
-                          text = '🤔 Thinking...';
-                        } else if (phase === 'researching') {
-                          const totalAgents = agentStatuses.length;
-                          const completedAgents = agentStatuses.filter(s => s.status === 'complete' || s.status === 'error').length;
-                          text = completedAgents === 0 
-                            ? `🔍 Researching... (${totalAgents} agent${totalAgents > 1 ? 's' : ''} working)`
-                            : `🔍 Researching... (${completedAgents} of ${totalAgents} complete)`;
-                        } else if (phase === 'synthesizing') {
-                          text = '✍️ Writing answer...';
-                        }
-                        
-                        return (
-                          <div className="text-[13px] font-medium text-cerna-primary mb-1 animate-agent-slide-in">
-                            {text}
+                      {researchProgress && (
+                        <div
+                          className="flex items-start justify-between gap-3 rounded-xl border px-4 py-3 animate-agent-slide-in"
+                          style={{
+                            background: 'rgba(255,255,255,0.04)',
+                            borderColor: 'rgba(255,255,255,0.08)',
+                            backdropFilter: 'blur(12px)',
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <div className="text-[13px] font-semibold text-cerna-text-primary">
+                              {researchProgress.title}
+                            </div>
+                            <div className="mt-1 text-[12px] leading-5 text-[rgba(255,255,255,0.45)]">
+                              {researchProgress.subtitle}
+                            </div>
                           </div>
-                        );
-                      })()}
-                      {agentStatuses.map((s) => (
-                        <AgentStatusCard key={s.name} status={hookStatusToUi(s)} />
+                          {researchProgress.elapsed && (
+                            <span className="shrink-0 rounded-full border border-white/10 bg-[rgba(255,255,255,0.04)] px-2.5 py-1 text-[11px] font-medium text-[rgba(255,255,255,0.58)]">
+                              {researchProgress.elapsed}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {agentStatuses.map((status) => (
+                        <AgentStatusCard key={status.name} status={hookStatusToUi(status)} />
                       ))}
                     </div>
                   )}
 
                   {showShimmer ? (
                     <div className="w-full">
-                      <div className="h-4 w-2/3 rounded bg-[rgba(255,255,255,0.06)] animate-pulse" />
-                      <div className="h-4 w-1/2 rounded bg-[rgba(255,255,255,0.06)] animate-pulse mt-2" />
+                      <div className="h-4 w-2/3 animate-pulse rounded bg-[rgba(255,255,255,0.06)]" />
+                      <div className="mt-2 h-4 w-1/2 animate-pulse rounded bg-[rgba(255,255,255,0.06)]" />
                     </div>
                   ) : (
-                    <MessageBubble role={m.role} content={m.content} createdAt={m.createdAt} />
+                    <MessageBubble
+                      messageId={message.id}
+                      role={message.role}
+                      content={message.content}
+                      createdAt={message.createdAt}
+                    />
                   )}
 
-                  {m.role === 'assistant' && (m.sources?.length ?? 0) > 0 && (
-                    <div>
-                      <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)] mb-2">
-                        Sources
-                      </div>
-                      <div className="flex gap-3 overflow-x-auto custom-scrollbar pb-2 snap-x">
-                        {m.sources!.map((s, i) => (
-                          <div key={s.url + i} id={`citation-${i + 1}`} className="snap-start scroll-mt-4">
-                            <CitationCard
-                              citation={{ url: s.url, title: s.title, domain: s.domain, snippet: s.snippet }}
-                              index={i}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                  {message.role === 'assistant' && (message.sources?.length ?? 0) > 0 && (
+                    <SourceRail
+                      messageId={message.id}
+                      sources={(message.sources ?? []).map((source) => normalizeCitation(source))}
+                    />
                   )}
 
-                  {m.role === 'assistant' &&
+                  {message.role === 'assistant' &&
                     isLastAssistant &&
                     !isStreaming &&
-                    (m.followUps?.length ?? 0) > 0 && (
+                    (message.followUps?.length ?? 0) > 0 && (
                       <div>
-                        <div className="text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)] mb-2">
+                        <div className="mb-2 text-xs uppercase tracking-wider text-[rgba(255,255,255,0.3)]">
                           Follow up
                         </div>
                         <SuggestionChips
-                          suggestions={m.followUps!}
-                          onSelect={(s) => void handleSend(s, depth)}
+                          suggestions={message.followUps ?? []}
+                          onSelect={(suggestion) => void handleSend(suggestion, depth)}
                           layout="inline"
                         />
                       </div>
@@ -460,14 +538,18 @@ export function AgentChat({
 
             {error && (
               <div
-                className="rounded-lg p-3 border flex items-start justify-between gap-3"
-                style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.08)' }}
+                className="flex items-start justify-between gap-3 rounded-lg border p-3"
+                style={{
+                  borderColor: 'rgba(239,68,68,0.3)',
+                  background: 'rgba(239,68,68,0.08)',
+                }}
               >
                 <p className="text-[13px] text-cerna-loss">Something went wrong. Please try again.</p>
                 {lastSentRef.current && (
                   <button
+                    type="button"
                     onClick={retry}
-                    className="text-[12px] text-cerna-primary hover:underline shrink-0"
+                    className="shrink-0 text-[12px] text-cerna-primary hover:underline"
                   >
                     Retry
                   </button>
@@ -478,7 +560,7 @@ export function AgentChat({
         )}
       </div>
 
-      <div className="shrink-0 pt-2">
+      <div className="shrink-0 bg-gradient-to-t from-[#0a0a0f] via-[#0a0a0f]/96 to-transparent pt-4 backdrop-blur-sm">
         <ChatInput
           onSend={handleSend}
           disabled={isStreaming || isLoading}

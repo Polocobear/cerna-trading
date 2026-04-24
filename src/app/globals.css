@@ -508,17 +508,65 @@ html, body {
 }
 
 .prose-cerna table {
-  border-collapse: collapse;
-  margin: 1em 0;
   width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.875rem;
 }
 
-.prose-cerna th, .prose-cerna td {
-  border: 1px solid var(--color-border);
-  padding: 0.5em 0.75em;
+.prose-cerna thead th {
+  background: rgba(124, 91, 240, 0.1);
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 600;
   text-align: left;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-.prose-cerna th {
-  background: var(--color-bg-tertiary);
+.prose-cerna tbody td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.prose-cerna tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.prose-cerna tbody td:first-child {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.prose-cerna blockquote {
+  margin: 1rem 0;
+}
+
+.chat-message sup a,
+.chat-message .citation-ref,
+.prose-cerna .citation-ref {
+  color: #7c5bf0;
+  font-size: 0.7em;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  vertical-align: super;
+  padding: 0 1px;
+}
+
+.chat-message sup a:hover,
+.chat-message .citation-ref:hover,
+.prose-cerna .citation-ref:hover {
+  color: #9d85f5;
+  text-decoration: underline;
+}
+
+.source-card-target {
+  scroll-margin-top: 5.5rem;
+}
+
+.source-card-target:target,
+.source-card-flash {
+  border-color: rgba(124, 91, 240, 0.55) !important;
+  box-shadow: 0 0 0 1px rgba(124, 91, 240, 0.2), 0 0 24px rgba(124, 91, 240, 0.12);
 }
