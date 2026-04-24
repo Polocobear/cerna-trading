@@ -18,8 +18,22 @@ interface AgentStatusCardProps {
   status: AgentStatus;
 }
 
+function splitCompletionNote(note?: string): { detail?: string; elapsed?: string } {
+  if (!note) return {};
+  const match = note.match(/\(([^()]*elapsed)\)\s*$/i);
+  if (!match || match.index == null) {
+    return { detail: note };
+  }
+  return {
+    detail: note.slice(0, match.index).trim(),
+    elapsed: match[1].trim(),
+  };
+}
+
 export function AgentStatusCard({ status }: AgentStatusCardProps) {
-  const { name, description, Icon, state, completionNote, sources } = status;
+  const { name, description, state, completionNote, sources } = status;
+  const { detail, elapsed } = splitCompletionNote(completionNote ?? description);
+
   return (
     <div className="flex flex-col gap-2">
       <div
@@ -48,17 +62,24 @@ export function AgentStatusCard({ status }: AgentStatusCardProps) {
             ) : state === 'error' ? (
               <AlertTriangle size={14} className="text-amber-400" />
             ) : (
-              <Icon size={14} style={{ color: 'var(--color-primary)' }} />
+              <div className="h-4 w-4 rounded-full border-2 border-[#7c5bf0]/35 border-t-[#7c5bf0] animate-spin" />
             )}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-medium text-cerna-text-primary">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[13px] font-medium text-cerna-text-primary">
               {name}
               {state === 'pending' && <span className="ml-2 text-gray-500 font-normal">Queued</span>}
-              {state === 'running' && <span className="ml-2 text-[#7c5bf0] font-normal">Researching...</span>}
+              {state === 'running' && <span className="ml-2 text-[#7c5bf0] font-normal">Running</span>}
+              </div>
+              {elapsed && state === 'running' && (
+                <span className="shrink-0 rounded-full border border-white/10 bg-[rgba(255,255,255,0.04)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[rgba(255,255,255,0.5)]">
+                  {elapsed}
+                </span>
+              )}
             </div>
             <div className={cn('text-[12px] leading-5', state === 'error' ? 'text-amber-200/80' : 'text-[rgba(255,255,255,0.4)]')}>
-              {completionNote ?? description}
+              {detail ?? description}
             </div>
           </div>
         </div>
