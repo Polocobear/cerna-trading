@@ -1,7 +1,65 @@
 import { callClaudeStream, CLAUDE_HAIKU } from '@/lib/claude/client';
-import { buildSynthesizerPrompt } from './prompts';
+import { buildSynthesizerPrompt, FINANCIAL_DISCLAIMER } from './prompts';
 import type { AgentSource, AgentResult } from './types';
 import type { AgentContext } from '@/lib/memory/context-builder';
+
+const OUTPUT_DENSITY_RULES = `OUTPUT DENSITY RULES
+
+- Never write generic introductory sentences. "Since you have no holdings yet, this screen gives you a framework" is filler. Start with the actionable content.
+- Every sentence must contain information the user didn't already have. If removing a sentence changes nothing about what the user knows or does, delete it.
+- The first sentence of every section should be the most important claim or recommendation in that section. Lead with the conclusion, then support it.
+- If a section heading is self-explanatory (like "What this means for your portfolio"), do not repeat it as the first sentence of the section. Jump straight to the substance.`;
+
+const CONVERSATION_AWARENESS = `CONVERSATION AWARENESS
+
+You may receive prior research outputs from earlier in this conversation via the conversation history. When prior research exists:
+
+- Explicitly connect new research to prior recommendations. "Earlier I screened for value - these momentum plays are a fundamentally different strategy with different risk characteristics."
+- Flag contradictions. If the value screen said "keep 30-40% in cash" and now the momentum screen says "deploy into TLX," acknowledge the tension.
+- Do not repeat analysis from prior turns. If BHP was already covered, reference it briefly ("BHP from the earlier screen remains the strongest income play") rather than re-analyzing it.
+- If the user's stated goals have evolved during the conversation (e.g., started asking about value, then pivoted to momentum), note the shift: "You've moved from income-focused to growth-focused - that's a different risk profile. Here's what the screen found, but consider how this fits alongside the value names from earlier."`;
+
+const MANDATORY_DISCLAIMER = `MANDATORY DISCLAIMER
+
+You MUST end every research output with the following disclaimer, separated by a horizontal rule. No exceptions. Do not modify the wording.
+
+---
+
+*This is general information only and does not constitute personal financial
+advice. It does not take into account your individual objectives, financial
+situation, or needs. Before making any investment decision, consider whether
+the information is appropriate for your circumstances and consult a licensed
+financial advisor. Past performance is not indicative of future results.*
+
+This disclaimer appears on EVERY message that contains stock recommendations, analysis, entry strategies, position sizing, or portfolio advice. It does NOT appear on simple conversational messages like greetings or clarifying questions.`;
+
+const DISCLAIMER_SIGNATURE =
+  'This is general information only and does not constitute personal financial';
+
+function buildSynthesisSystemPrompt(
+  portfolioContext: string,
+  intelligenceContext?: string,
+  sourcesContext?: string
+): string {
+  return [
+    buildSynthesizerPrompt(portfolioContext, intelligenceContext, sourcesContext),
+    OUTPUT_DENSITY_RULES,
+    CONVERSATION_AWARENESS,
+    MANDATORY_DISCLAIMER,
+  ].join('\n\n');
+}
+
+function needsDisclaimer(text: string): boolean {
+  return !text.includes(DISCLAIMER_SIGNATURE);
+}
+
+function isResearchResultName(name: string): boolean {
+  return name === 'screen_stocks' || name === 'analyze_stock' || name === 'brief_market';
+}
+
+function isResearchAgentType(agent: AgentResult['agent']): boolean {
+  return agent === 'screen' || agent === 'analyze' || agent === 'brief';
+}
 
 function formatAgentResultsChunked(
   results: Array<{ name: string; success: boolean; content: string | null; error?: string; sources?: AgentSource[] }>
@@ -180,7 +238,7 @@ export async function runSynthesizer(options: {
   const sourcesContext = consolidatedSources
     .map((source, index) => `[${index + 1}] ${source.title} - ${source.domain}\n${source.url}`)
     .join('\n\n');
-  const systemPrompt = buildSynthesizerPrompt(
+  const systemPrompt = buildSynthesisSystemPrompt(
     context.portfolioContext,
     context.intelligenceContext,
     sourcesContext
@@ -199,6 +257,10 @@ export async function runSynthesizer(options: {
     onToken
   );
 
+  if (results.some((result) => result.success && isResearchResultName(result.name)) && needsDisclaimer(response.text)) {
+    onToken(`\n\n${FINANCIAL_DISCLAIMER}`);
+  }
+
   onSources(mergeSources(parseSourcesFromResponse(response.text), consolidatedSources));
   onFollowUps([]);
 }
@@ -215,7 +277,11 @@ export async function* synthesize(
     throw new Error('Pipeline deadline approached before synthesis');
   }
 
-  const systemPrompt = buildSynthesizerPrompt(portfolioContext, intelligenceContext, sourcesContext);
+  const systemPrompt = buildSynthesisSystemPrompt(
+    portfolioContext,
+    intelligenceContext,
+    sourcesContext
+  );
   const { agentBlock, failedAgents } = formatAgentResultsLegacy(agentResults);
   const consolidatedSources = dedupeSources(agentResults);
   const userMessage = buildUserMessage(userQuery, agentBlock, consolidatedSources, failedAgents);
@@ -232,7 +298,12 @@ export async function* synthesize(
     (chunk) => {
       queue.push(chunk);
     }
-  );
+  ).then((response) => {
+    if (agentResults.some((result) => result.status === 'success' && isResearchAgentType(result.agent)) && needsDisclaimer(response.text)) {
+      queue.push(`\n\n${FINANCIAL_DISCLAIMER}`);
+    }
+    return response;
+  });
 
   void streamPromise.then(
     () => queue.close(),

@@ -5,7 +5,12 @@ import {
   isClaudeApiError,
   parseClaudeJson,
 } from '@/lib/claude/client';
-import { buildOrchestratorSystemPrompt, type ExchangeContext } from './prompts';
+import type { Profile } from '@/types/portfolio';
+import {
+  buildOrchestratorSystemPrompt,
+  type ExchangeContext,
+  type ResearchUserContext,
+} from './prompts';
 import type { ToolCall, ToolName } from './types';
 
 const VALID_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
@@ -87,10 +92,197 @@ const SECTOR_KEYWORDS: Array<{ pattern: RegExp; value: string }> = [
 
 type OrchestratorContext = {
   exchangeCtx: ExchangeContext;
+  profile?: Profile | null;
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
   investmentStrategy?: string | null;
   deadlineMs?: number;
 };
+
+// INTENT CLASSIFICATION lives in the shared orchestrator prompt, and the
+// fallback heuristics below mirror it so vague intent still triggers
+// clarification when Claude is unavailable.
+const VAGUE_INTENT_REPLY =
+  "Happy to help. Are you leaning more toward steady income, growth, or shorter-term trades? Any sectors or themes you want me to focus on, or should I scan broadly?";
+
+function latestUserMessages(
+  userMessage: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+): string[] {
+  return [
+    userMessage,
+    ...history
+      .filter((entry) => entry.role === 'user' && typeof entry.content === 'string')
+      .slice(-10)
+      .reverse()
+      .map((entry) => entry.content),
+  ];
+}
+
+function findFirstMatch<T>(
+  messages: string[],
+  matcher: (message: string) => T | undefined
+): T | undefined {
+  for (const message of messages) {
+    const match = matcher(message);
+    if (match !== undefined) return match;
+  }
+  return undefined;
+}
+
+function extractExperienceLevel(messages: string[]): ResearchUserContext['experienceLevel'] {
+  return findFirstMatch(messages, (message) => {
+    const normalized = message.toLowerCase();
+    if (
+      /\b(new to investing|new investor|beginner|just starting|first time investing|no experience)\b/.test(
+        normalized
+      )
+    ) {
+      return 'beginner';
+    }
+    if (
+      /\b(trading for years|investing for years|experienced investor|experienced trader|advanced trader|advanced investor)\b/.test(
+        normalized
+      )
+    ) {
+      return 'advanced';
+    }
+    if (/\b(some experience|intermediate)\b/.test(normalized)) {
+      return 'intermediate';
+    }
+    return undefined;
+  });
+}
+
+function extractAccountType(
+  messages: string[],
+  profile?: Profile | null
+): ResearchUserContext['accountType'] {
+  const explicit = findFirstMatch(messages, (message) => {
+    const normalized = message.toLowerCase();
+    if (/\bsmsf\b/.test(normalized)) return 'smsf';
+    if (/\bpersonal account\b|\bpersonal portfolio\b|\bmy own account\b/.test(normalized)) {
+      return 'personal';
+    }
+    if (/\btrust\b/.test(normalized)) return 'trust';
+    if (/\bcompany account\b|\bcompany portfolio\b|\bcorporate account\b/.test(normalized)) {
+      return 'company';
+    }
+    return undefined;
+  });
+
+  if (explicit) return explicit;
+  if (profile?.smsf_name) return 'smsf';
+  return 'unknown';
+}
+
+function extractRiskTolerance(
+  messages: string[],
+  profile?: Profile | null
+): ResearchUserContext['riskTolerance'] {
+  const explicit = findFirstMatch(messages, (message) => {
+    const normalized = message.toLowerCase();
+    if (/\b(conservative|safe|low risk|defensive)\b/.test(normalized)) return 'conservative';
+    if (/\b(aggressive|high risk|speculative|swing for the fences)\b/.test(normalized)) {
+      return 'aggressive';
+    }
+    if (/\b(moderate|balanced)\b/.test(normalized)) return 'moderate';
+    return undefined;
+  });
+
+  return explicit ?? profile?.risk_tolerance ?? 'unknown';
+}
+
+function normalizeInvestmentGoal(raw?: string | null): ResearchUserContext['investmentGoal'] {
+  const normalized = raw?.trim().toLowerCase() ?? '';
+  if (!normalized) return undefined;
+  if (normalized.includes('income') || normalized.includes('dividend')) return 'income';
+  if (normalized.includes('growth')) return 'growth';
+  if (
+    normalized.includes('trade') ||
+    normalized.includes('trading') ||
+    normalized.includes('momentum') ||
+    normalized.includes('make money')
+  ) {
+    return 'trading';
+  }
+  return undefined;
+}
+
+function extractCapitalBase(messages: string[]): number | null {
+  const amountRegex =
+    /(?:\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)|(?:^|[\s(])([0-9]+(?:\.[0-9]+)?)\s*([km])\b)/gi;
+
+  for (const message of messages) {
+    let match: RegExpExecArray | null;
+    while ((match = amountRegex.exec(message)) !== null) {
+      if (match[1]) {
+        const amount = Number(match[1].replace(/,/g, ''));
+        if (Number.isFinite(amount) && amount >= 1000) {
+          return amount;
+        }
+      }
+      if (match[2] && match[3]) {
+        const base = Number(match[2]);
+        if (!Number.isFinite(base)) continue;
+        const multiplier = match[3].toLowerCase() === 'm' ? 1_000_000 : 1_000;
+        const amount = base * multiplier;
+        if (amount >= 1000) return amount;
+      }
+    }
+  }
+  return null;
+}
+
+function buildResearchUserContext(
+  userMessage: string,
+  context: OrchestratorContext
+): ResearchUserContext {
+  const messages = latestUserMessages(userMessage, context.history);
+  const investmentGoal =
+    findFirstMatch(messages, (message) => normalizeInvestmentGoal(message)) ??
+    normalizeInvestmentGoal(context.profile?.investment_strategy) ??
+    normalizeInvestmentGoal(context.investmentStrategy) ??
+    'unknown';
+
+  return {
+    experienceLevel: extractExperienceLevel(messages) ?? 'unknown',
+    accountType: extractAccountType(messages, context.profile),
+    riskTolerance: extractRiskTolerance(messages, context.profile),
+    investmentGoal,
+    capitalBase: extractCapitalBase(messages),
+  };
+}
+
+function isVagueIntentMessage(message: string, ticker: string | null, sector?: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (ticker || sector || extractExchange(message)) return false;
+  if (
+    normalized.includes('portfolio') ||
+    normalized.includes('holdings') ||
+    normalized.includes('rebalance') ||
+    normalized.includes('market') ||
+    normalized.includes('news') ||
+    normalized.includes('earnings')
+  ) {
+    return false;
+  }
+
+  return (
+    normalized === 'stocks' ||
+    normalized === 'shares' ||
+    normalized === 'invest' ||
+    normalized === 'i want to invest' ||
+    normalized === 'what should i buy' ||
+    normalized === 'help me make money' ||
+    normalized === 'help me invest' ||
+    normalized === 'any ideas' ||
+    normalized === 'opportunities' ||
+    (/\b(invest|ideas|opportunities|what should i buy|help me make money)\b/.test(normalized) &&
+      !/\b(value|growth|dividend|income|momentum|turnaround|quality|under \$|\bunder\b|over \$|\bover\b)\b/.test(
+        normalized
+      ))
+  );
+}
 
 function inferDefaultStrategy(investmentStrategy?: string | null):
   | 'value'
@@ -365,6 +557,13 @@ function buildFallbackPlan(
     return { toolCalls, directReply: null };
   }
 
+  if (isVagueIntentMessage(userMessage, ticker, sector)) {
+    return {
+      toolCalls: [],
+      directReply: VAGUE_INTENT_REPLY,
+    };
+  }
+
   const wantsPortfolio =
     normalized.includes('portfolio') ||
     normalized.includes('holdings') ||
@@ -466,7 +665,13 @@ function parseToolCallsFromResponse(text: string): {
 export async function runOrchestrator(
   userMessage: string,
   context: OrchestratorContext
-): Promise<{ toolCalls: ToolCall[]; directReply: string | null; deep?: boolean }> {
+): Promise<{
+  toolCalls: ToolCall[];
+  directReply: string | null;
+  deep?: boolean;
+  userContext: ResearchUserContext;
+}> {
+  const userContext = buildResearchUserContext(userMessage, context);
   try {
     const response = await callClaude({
       model: CLAUDE_HAIKU,
@@ -488,12 +693,14 @@ export async function runOrchestrator(
         toolCalls: [],
         directReply: parsed.directReply || 'How can I help with your portfolio today?',
         deep: parsed.deep,
+        userContext,
       };
     }
     return {
       toolCalls: parsed.toolCalls,
       directReply: null,
       deep: parsed.deep,
+      userContext,
     };
   } catch (err) {
     const status = isClaudeApiError(err) ? err.status : err instanceof APIError ? err.status : undefined;
@@ -506,6 +713,9 @@ export async function runOrchestrator(
       status,
       error: message,
     });
-    return buildFallbackPlan(userMessage, context);
+    return {
+      ...buildFallbackPlan(userMessage, context),
+      userContext,
+    };
   }
 }

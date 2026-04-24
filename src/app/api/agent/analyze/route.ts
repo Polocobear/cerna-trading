@@ -12,15 +12,20 @@ export async function POST(req: NextRequest) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { args, context, deep } = await req.json();
+    const { args, context, deep, userContext } = await req.json();
+    const nextContext = {
+      ...(context ?? {}),
+      userContext: userContext ?? context?.userContext,
+    };
 
     const handle = await tasks.trigger<typeof researchAnalyzeTask>(
       'research-analyze',
       {
         userId: user.id,
         args,
-        context,
+        context: nextContext,
         deep: !!deep,
+        userContext: nextContext.userContext,
       },
       {
         ttl: '1h',

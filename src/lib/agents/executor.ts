@@ -77,15 +77,16 @@ function argsToUserMessage(name: string, args: Record<string, unknown>): string 
 function systemPromptFor(
   agent: AgentName,
   portfolioContext: string,
-  exchange: ExchangeContext
+  exchange: ExchangeContext,
+  userContext?: AgentContext['userContext']
 ): string {
   switch (agent) {
     case 'screen':
-      return buildScreenPrompt(portfolioContext, exchange);
+      return buildScreenPrompt(portfolioContext, exchange, userContext);
     case 'analyze':
-      return buildAnalyzePrompt(portfolioContext, exchange);
+      return buildAnalyzePrompt(portfolioContext, exchange, userContext);
     case 'brief':
-      return buildBriefPrompt(portfolioContext, exchange);
+      return buildBriefPrompt(portfolioContext, exchange, userContext);
     case 'portfolio':
       return buildPortfolioCheckPrompt(portfolioContext, exchange);
     case 'trade_log':
@@ -338,7 +339,12 @@ export async function runResearchAgent(options: {
   } = options;
 
   const agent = classify(name);
-  const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
+  const systemPrompt = systemPromptFor(
+    agent,
+    context.portfolioContext,
+    context.exchangeCtx,
+    context.userContext
+  );
   const promptUserMessage = argsToUserMessage(name, args);
 
   try {
@@ -429,7 +435,12 @@ export async function runAgent(options: {
     });
   }
 
-  const systemPrompt = systemPromptFor(agent, context.portfolioContext, context.exchangeCtx);
+  const systemPrompt = systemPromptFor(
+    agent,
+    context.portfolioContext,
+    context.exchangeCtx,
+    context.userContext
+  );
   const promptUserMessage = argsToUserMessage(name, args);
 
   try {
@@ -467,8 +478,13 @@ export async function runAgent(options: {
 }
 
 export interface ExecuteAgentsContext {
+  profile?: AgentContext['profile'];
+  positions?: AgentContext['positions'];
+  watchlist?: AgentContext['watchlist'];
   portfolioContext: string;
   exchange: ExchangeContext;
+  intelligenceContext?: string;
+  userContext?: AgentContext['userContext'];
   isDeepAvailable: boolean;
   supabase: SupabaseClient;
   userId: string;
@@ -487,12 +503,13 @@ export async function executeAgents(
     onEvent({ type: 'agent_start', agent, description });
 
     const context: AgentContext = {
-      profile: null,
-      positions: [],
-      watchlist: [],
+      profile: ctx.profile ?? null,
+      positions: ctx.positions ?? [],
+      watchlist: ctx.watchlist ?? [],
       exchangeCtx: ctx.exchange,
       portfolioContext: ctx.portfolioContext,
-      intelligenceContext: '',
+      intelligenceContext: ctx.intelligenceContext ?? '',
+      userContext: ctx.userContext,
     };
 
     const start = Date.now();

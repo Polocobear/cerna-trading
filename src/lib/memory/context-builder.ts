@@ -5,7 +5,7 @@ import { getSessionContext } from './session-summarizer';
 import type { IntelligenceContext } from './types';
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import { buildPortfolioContext, buildExchangeContext } from '@/lib/agents/prompts';
-import type { ExchangeContext } from '@/lib/agents/prompts';
+import type { ExchangeContext, ResearchUserContext } from '@/lib/agents/prompts';
 
 const MAX_TOTAL_CHARS = 4800; // ~1200 tokens
 
@@ -63,6 +63,7 @@ export interface AgentContext {
   exchangeCtx: ExchangeContext;
   portfolioContext: string;
   intelligenceContext: string;
+  userContext?: ResearchUserContext;
 }
 
 export async function buildContext(

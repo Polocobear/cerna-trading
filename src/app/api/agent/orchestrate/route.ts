@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
     const deadlineMs = Date.now() + 25000;
     const result = await runOrchestrator(message, {
       exchangeCtx: context.exchangeCtx,
+      profile: context.profile,
       investmentStrategy: context.profile?.investment_strategy ?? null,
       deadlineMs,
     });
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
         exchangeCtx: context.exchangeCtx,
         portfolioContext: context.portfolioContext,
         intelligenceContext: context.intelligenceContext,
+        userContext: result.userContext,
       },
     });
   } catch (err) {

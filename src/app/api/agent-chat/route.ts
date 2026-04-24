@@ -273,6 +273,7 @@ export async function POST(req: Request) {
           plan = await runOrchestrator(message, {
             history: history.slice(-10),
             exchangeCtx: exchangeCtx,
+            profile,
             investmentStrategy: profile?.investment_strategy ?? null,
             deadlineMs: pipelineDeadline,
           });
@@ -338,8 +339,13 @@ export async function POST(req: Request) {
           results = await executeAgents(
             plan.toolCalls,
             {
+              profile,
+              positions,
+              watchlist,
               portfolioContext: portfolioCtx.text,
               exchange: exchangeCtx,
+              intelligenceContext: intelCtx.full,
+              userContext: plan.userContext,
               isDeepAvailable: useDeep,
               supabase,
               userId: user.id,
