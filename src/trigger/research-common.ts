@@ -11,6 +11,7 @@ export interface TriggerResearchPayload {
   args: Record<string, unknown>;
   context: AgentContext;
   deep?: boolean;
+  userContext?: AgentContext['userContext'];
 }
 
 export interface TriggerResearchOutput {
@@ -110,6 +111,11 @@ export async function runTriggeredResearchTask(
   payload: TriggerResearchPayload,
   model: AgentResult['model'] = CLAUDE_SONNET
 ): Promise<TriggerResearchOutput> {
+  const effectiveContext: AgentContext = {
+    ...payload.context,
+    userContext: payload.userContext ?? payload.context.userContext,
+  };
+
   metadata.set('status', 'running');
   metadata.set('toolName', name);
   metadata.set('userId', payload.userId);
@@ -133,7 +139,7 @@ export async function runTriggeredResearchTask(
     const result = await runResearchAgent({
       name,
       args: payload.args,
-      context: payload.context,
+      context: effectiveContext,
       model,
       thinkingLevel: payload.deep ? 'high' : 'medium',
       maxOutputTokens: payload.deep ? 32768 : 16384,
