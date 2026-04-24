@@ -1,6 +1,6 @@
 import Anthropic, { APIError } from '@anthropic-ai/sdk';
 
-export const CLAUDE_SONNET = 'claude-sonnet-4-6-20250929' as const;
+export const CLAUDE_SONNET = 'claude-sonnet-4-20250514' as const;
 export const CLAUDE_HAIKU = 'claude-haiku-4-5-20251001' as const;
 
 type ClaudeModel = typeof CLAUDE_SONNET | typeof CLAUDE_HAIKU;

@@ -4,7 +4,7 @@
 
 export type AgentName = 'screen' | 'analyze' | 'brief' | 'portfolio' | 'trade_log';
 
-export type AgentModel = 'claude-haiku-4-5-20251001' | 'claude-sonnet-4-6-20250929';
+export type AgentModel = 'claude-haiku-4-5-20251001' | 'claude-sonnet-4-20250514';
 
 export interface AgentSource {
   title: string;
