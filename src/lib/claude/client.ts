@@ -138,6 +138,7 @@ function buildRequest(options: ClaudeCallOptions): Anthropic.MessageCreateParams
       {
         type: 'web_search_20260209',
         name: 'web_search',
+        allowed_callers: ['direct'],
         max_uses: webSearchMaxUses,
       },
     ];
