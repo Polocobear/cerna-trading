@@ -40,6 +40,62 @@ const AGENT_LABELS: Record<AgentName, string> = {
   trade_log: 'Trade Logger',
 };
 
+function sessionDraftKey(sessionId: string): string {
+  return `cerna-agent-chat:${sessionId}`;
+}
+
+function parseDraftState(raw: string | null): {
+  messages: AgentChatMessage[];
+  persistedIds: string[];
+} {
+  if (!raw) return { messages: [], persistedIds: [] };
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const rawMessages = Array.isArray(parsed)
+      ? parsed
+      : typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { messages?: unknown }).messages)
+        ? (parsed as { messages: unknown[] }).messages
+        : [];
+    const persistedIds =
+      typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { persistedIds?: unknown }).persistedIds)
+        ? (parsed as { persistedIds: unknown[] }).persistedIds.filter((value): value is string => typeof value === 'string')
+        : [];
+
+    const messages = rawMessages
+      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .filter(
+        (item) =>
+          (item.role === 'user' || item.role === 'assistant') &&
+          typeof item.content === 'string' &&
+          typeof item.createdAt === 'string' &&
+          typeof item.id === 'string'
+      )
+      .map((item) => ({
+        id: item.id as string,
+        role: item.role as 'user' | 'assistant',
+        content: item.content as string,
+        createdAt: item.createdAt as string,
+        sources: Array.isArray(item.sources)
+          ? item.sources
+              .filter((source): source is Record<string, unknown> => typeof source === 'object' && source !== null)
+              .map((source) => ({
+                title: typeof source.title === 'string' ? source.title : '',
+                url: typeof source.url === 'string' ? source.url : '',
+                domain: typeof source.domain === 'string' ? source.domain : '',
+                snippet: typeof source.snippet === 'string' ? source.snippet : undefined,
+              }))
+              .filter((source) => source.url)
+          : [],
+        followUps: Array.isArray(item.followUps)
+          ? item.followUps.filter((followUp): followUp is string => typeof followUp === 'string')
+          : [],
+      }));
+    return { messages, persistedIds };
+  } catch {
+    return { messages: [], persistedIds: [] };
+  }
+}
+
 function chatMessageToAgent(m: ChatMessage): AgentChatMessage {
   return {
     id: m.id,
@@ -115,11 +171,105 @@ export function AgentChat({
   const [autoScroll, setAutoScroll] = useState(true);
   const lastSentRef = useRef<string>('');
   const lastQueuedPromptIdRef = useRef<number | undefined>(undefined);
+  const persistedMessageIdsRef = useRef<Set<string>>(new Set());
+  const persistenceInFlightRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    loadSession(initialMessages.map(chatMessageToAgent));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMessages]);
+    persistedMessageIdsRef.current = new Set();
+    persistenceInFlightRef.current = new Set();
+
+    const historyMessages = initialMessages.map(chatMessageToAgent);
+    if (historyMessages.length > 0) {
+      persistedMessageIdsRef.current = new Set(historyMessages.map((message) => message.id));
+      window.sessionStorage.removeItem(sessionDraftKey(sessionId));
+      loadSession(historyMessages);
+      return;
+    }
+
+    const draftState = parseDraftState(window.sessionStorage.getItem(sessionDraftKey(sessionId)));
+    persistedMessageIdsRef.current = new Set(draftState.persistedIds);
+    if (draftState.messages.length > 0) {
+      loadSession(draftState.messages);
+      return;
+    }
+
+    loadSession([]);
+  }, [initialMessages, loadSession, sessionId]);
+
+  useEffect(() => {
+    const key = sessionDraftKey(sessionId);
+    if (messages.length === 0) {
+      window.sessionStorage.removeItem(key);
+      return;
+    }
+    window.sessionStorage.setItem(
+      key,
+      JSON.stringify({
+        messages,
+        persistedIds: Array.from(persistedMessageIdsRef.current),
+      })
+    );
+  }, [messages, sessionId]);
+
+  useEffect(() => {
+    const unsavedMessages = messages.filter((message) => {
+      if (persistedMessageIdsRef.current.has(message.id)) return false;
+      if (persistenceInFlightRef.current.has(message.id)) return false;
+      if (message.role === 'user') return message.content.trim().length > 0;
+      return (
+        message.content.trim().length > 0 &&
+        phase === 'done' &&
+        !isLoading &&
+        !isStreaming &&
+        error == null
+      );
+    });
+
+    if (unsavedMessages.length === 0) return;
+
+    unsavedMessages.forEach((message) => persistenceInFlightRef.current.add(message.id));
+
+    void fetch(`/api/sessions/${sessionId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: unsavedMessages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          citations:
+            message.role === 'assistant'
+              ? (message.sources ?? []).map((source) => ({
+                  url: source.url,
+                  title: source.title,
+                  domain: source.domain,
+                  snippet: source.snippet,
+                }))
+              : [],
+        })),
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error('Failed to persist chat session');
+        }
+        unsavedMessages.forEach((message) => {
+          persistenceInFlightRef.current.delete(message.id);
+          persistedMessageIdsRef.current.add(message.id);
+        });
+        window.sessionStorage.setItem(
+          sessionDraftKey(sessionId),
+          JSON.stringify({
+            messages,
+            persistedIds: Array.from(persistedMessageIdsRef.current),
+          })
+        );
+      })
+      .catch(() => {
+        unsavedMessages.forEach((message) => {
+          persistenceInFlightRef.current.delete(message.id);
+        });
+      });
+  }, [messages, phase, isLoading, isStreaming, error, sessionId]);
 
   useEffect(() => {
     if (sessionTitle && onSessionTitle) onSessionTitle(sessionTitle);
