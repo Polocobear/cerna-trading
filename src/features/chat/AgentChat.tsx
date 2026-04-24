@@ -163,6 +163,7 @@ export function AgentChat({
     phase,
     sendMessage,
     loadSession,
+    resumePendingSession,
   } = useAgentChat({ sessionId, depth });
 
   const { alerts, dismissAlert, markRead } = useAlerts();
@@ -183,6 +184,12 @@ export function AgentChat({
       persistedMessageIdsRef.current = new Set(historyMessages.map((message) => message.id));
       window.sessionStorage.removeItem(sessionDraftKey(sessionId));
       loadSession(historyMessages);
+      const hasCompletedAssistant = historyMessages.some(
+        (message) => message.role === 'assistant' && message.content.trim().length > 0
+      );
+      if (!hasCompletedAssistant) {
+        resumePendingSession();
+      }
       return;
     }
 
@@ -190,11 +197,13 @@ export function AgentChat({
     persistedMessageIdsRef.current = new Set(draftState.persistedIds);
     if (draftState.messages.length > 0) {
       loadSession(draftState.messages);
+      resumePendingSession();
       return;
     }
 
     loadSession([]);
-  }, [initialMessages, loadSession, sessionId]);
+    resumePendingSession();
+  }, [initialMessages, loadSession, resumePendingSession, sessionId]);
 
   useEffect(() => {
     const key = sessionDraftKey(sessionId);
