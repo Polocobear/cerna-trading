@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       toolCalls: result.toolCalls ?? [],
       directReply: result.directReply ?? null,
+      tradeCheck: result.tradeCheck ?? null,
       context: {
         profile: context.profile,
         positions: context.positions,

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentName } from './types';
+import { useTradeCheck } from './use-trade-check';
+import type { TradeCheckState } from './trade-check-types';
 
 export type AgentStatusState = 'pending' | 'running' | 'complete' | 'error';
 
@@ -35,7 +37,7 @@ interface UseAgentChatOptions {
   depth: 'standard' | 'deep';
 }
 
-export type Phase = 'idle' | 'orchestrating' | 'researching' | 'synthesizing' | 'done';
+export type Phase = 'idle' | 'orchestrating' | 'researching' | 'synthesizing' | 'trade_check' | 'done';
 
 interface UseAgentChatResult {
   messages: AgentChatMessage[];
@@ -48,6 +50,7 @@ interface UseAgentChatResult {
   sessionTitle: string | null;
   error: string | null;
   phase: Phase;
+  tradeCheckState: TradeCheckState | null;
   sendMessage: (message: string) => Promise<void>;
   resetSession: () => void;
   loadSession: (messages: AgentChatMessage[]) => void;
@@ -363,6 +366,18 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
 
   const abortRef = useRef<AbortController | null>(null);
   const recoveryInFlightRef = useRef(false);
+  const {
+    tradeCheckState,
+    startTradeCheck,
+    handleTradeCheckMessage,
+    clearTradeCheck,
+  } = useTradeCheck({
+    setMessages,
+    setError,
+    setIsLoading,
+    setIsStreaming,
+    setPhase,
+  });
 
   // Fetch deep-remaining initial value.
   useEffect(() => {
@@ -392,6 +407,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
   const resetSession = useCallback(() => {
     abortRef.current?.abort();
     clearPendingSessionState();
+    clearTradeCheck();
     setMessages([]);
     setAgentsRecord({});
     setPhase('idle');
@@ -401,10 +417,11 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
     setError(null);
     setIsLoading(false);
     setIsStreaming(false);
-  }, [clearPendingSessionState]);
+  }, [clearPendingSessionState, clearTradeCheck]);
 
   const loadSession = useCallback((initial: AgentChatMessage[]) => {
     abortRef.current?.abort();
+    clearTradeCheck();
     setMessages(initial);
     setAgentsRecord({});
     setPhase('idle');
@@ -415,14 +432,14 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
     setError(null);
     setIsLoading(false);
     setIsStreaming(false);
-  }, []);
+  }, [clearTradeCheck]);
 
   useEffect(() => {
     const hasCompletedAssistant = messages.some(
       (message) => message.role === 'assistant' && message.content.trim().length > 0
     );
 
-    if (hasCompletedAssistant && (phase === 'idle' || phase === 'done')) {
+    if (hasCompletedAssistant && (phase === 'idle' || phase === 'done' || phase === 'trade_check')) {
       clearPendingSessionState();
     }
   }, [clearPendingSessionState, messages, phase]);
@@ -885,7 +902,6 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       setError(null);
       setIsLoading(true);
       setIsStreaming(false);
-      setPhase('orchestrating');
       setSources([]);
       setFollowUps([]);
 
@@ -911,6 +927,16 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
       ]);
 
       try {
+        if (tradeCheckState?.active) {
+          setAgentsRecord({});
+          setPhase('trade_check');
+          await handleTradeCheckMessage(messageText, assistantId);
+          return;
+        }
+
+        clearTradeCheck();
+        setPhase('orchestrating');
+
         // === STEP 1: Orchestrate ===
         const orchRes = await fetch('/api/agent/orchestrate', {
           method: 'POST',
@@ -919,7 +945,14 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
           signal: controller.signal,
         });
         if (!orchRes.ok) throw new Error('Orchestration failed');
-        const { toolCalls, directReply, context } = await orchRes.json();
+        const { toolCalls, directReply, tradeCheck, context } = await orchRes.json();
+
+        if (tradeCheck) {
+          setAgentsRecord({});
+          setPhase('trade_check');
+          await startTradeCheck(tradeCheck, context, assistantId);
+          return;
+        }
 
         // If orchestrator answered directly (no tools), we're done
         if (directReply && toolCalls.length === 0) {
@@ -1089,12 +1122,16 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
     [
       classify,
       clearPendingSessionState,
+      clearTradeCheck,
       depth,
       endpointFor,
+      handleTradeCheckMessage,
       labelFor,
       runSynthesis,
       sessionId,
       setAssistantContent,
+      startTradeCheck,
+      tradeCheckState,
       waitForTriggerRuns,
     ]
   );
@@ -1119,6 +1156,7 @@ export function useAgentChat(options: UseAgentChatOptions): UseAgentChatResult {
     sessionTitle,
     error,
     phase,
+    tradeCheckState,
     sendMessage,
     resetSession,
     loadSession,

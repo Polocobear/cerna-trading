@@ -1,5 +1,11 @@
 import type { Position, Profile, WatchlistItem } from '@/types/portfolio';
 import type { PortfolioContextPayload } from './types';
+import type {
+  TradeCheckRequestedAction,
+  TradeCheckResponseClassification,
+  TradeCheckState,
+  TradeCheckStepId,
+} from './trade-check-types';
 
 /**
  * Build portfolio context block shared across all agent prompts.
@@ -176,7 +182,15 @@ When the user's message arrives, classify it into one of these categories:
    Examples: "Tell me more about BHP", "What about the risks?", "Buy it"
    -> Route to the relevant agent with conversation context.
 
-5. GENERAL CHAT - Greetings, meta-questions, off-topic.
+5. TRADE CHECK - The user names a specific stock and wants a decision, checklist, or step-by-step call.
+   Examples: "Should I buy BHP?", "Trade check CBA", "Walk me through a TLX entry"
+   -> Start the trade check flow. Do NOT send them straight to a generic analyze_stock run unless they explicitly asked for analysis instead of a decision.
+
+6. TRADE CHECK RESPONSE - The user is responding to an active trade check.
+   Examples: "continue", "challenge that", "skip catalysts", "size it at 4%", "stop here"
+   -> Treat it as a control input for the trade check flow, not a fresh research request.
+
+7. GENERAL CHAT - Greetings, meta-questions, off-topic.
    Examples: "Hello", "What can you do?", "Thanks"
    -> Respond conversationally. Do not route to any agent.
 
@@ -206,13 +220,14 @@ Pass these to the research agent so it can calibrate its output. A beginner with
 
 1. If the message is a greeting or small talk -> respond directly in 1-2 warm sentences. No tools.
 2. If the message is vague investing intent with no usable constraints -> ask clarifying questions. No tools yet.
-3. If the message mentions a specific ticker -> call analyze_stock. If the message also implies a buy/sell decision, add check_portfolio.
-4. If the message asks about market conditions, news, or "what's happening" -> call brief_market. If it also asks for ideas, add screen_stocks.
-5. If the message asks about their portfolio -> call check_portfolio. If they also want ideas, add screen_stocks.
-6. If the user reports a trade -> call log_trade. Confirm details back.
-7. Maximum 3 tools per turn. Prefer fewer, higher-leverage calls.
-8. NEVER call the same tool twice in one turn.
-9. When calling tools, fill args precisely. Tickers uppercase, no exchange suffix. If the user mentions a specific exchange, pass it in the exchange arg. Otherwise omit it - the agent will use their default.
+3. If the message names a specific ticker and asks for a decision, checklist, entry plan, or "should I buy/sell/add/trim" -> start trade check instead of generic analysis.
+4. If the message mentions a specific ticker and asks for deep analysis rather than a decision -> call analyze_stock. If the message also implies a buy/sell decision, prefer trade check.
+5. If the message asks about market conditions, news, or "what's happening" -> call brief_market. If it also asks for ideas, add screen_stocks.
+6. If the message asks about their portfolio -> call check_portfolio. If they also want ideas, add screen_stocks.
+7. If the user reports a trade -> call log_trade. Confirm details back.
+8. Maximum 3 tools per turn. Prefer fewer, higher-leverage calls.
+9. NEVER call the same tool twice in one turn.
+10. When calling tools, fill args precisely. Tickers uppercase, no exchange suffix. If the user mentions a specific exchange, pass it in the exchange arg. Otherwise omit it - the agent will use their default.
 
 ## Tone
 
@@ -564,6 +579,339 @@ export function buildPortfolioCheckPrompt(
   exchange: ExchangeContext
 ): string {
   return withContext(PORTFOLIO_CHECK_PROMPT_TEMPLATE, portfolioContext, exchange);
+}
+
+function formatRequestedTradeAction(action: TradeCheckRequestedAction): string {
+  switch (action) {
+    case 'buy':
+      return 'buy';
+    case 'sell':
+      return 'sell';
+    case 'add':
+      return 'add to';
+    case 'trim':
+      return 'trim';
+    case 'hold':
+      return 'hold';
+    case 'unknown':
+    default:
+      return 'act on';
+  }
+}
+
+function withTradeCheckContext(
+  template: string,
+  options: {
+    portfolioContext: string;
+    exchange: ExchangeContext;
+    ticker: string;
+    requestedAction: TradeCheckRequestedAction;
+    userContext?: ResearchUserContext;
+    extraContext?: string;
+  }
+): string {
+  const base = withContext(template, options.portfolioContext, options.exchange)
+    .replace(/\{ticker\}/g, options.ticker.toUpperCase())
+    .replace(/\{requestedAction\}/g, formatRequestedTradeAction(options.requestedAction));
+  const extra = options.extraContext ? `\n\n${options.extraContext}` : '';
+  return `${base}${buildUserContextBlock(options.userContext)}${extra}`;
+}
+
+function summarizeTradeCheckState(state: TradeCheckState): string {
+  const completedSteps = Object.values(state.steps)
+    .filter((step) => step.status === 'complete' || step.status === 'skipped')
+    .map((step) => {
+      if (!step.result) return `- ${step.title}: ${step.status}`;
+      const headline =
+        'headline' in step.result && typeof step.result.headline === 'string'
+          ? step.result.headline
+          : step.title;
+      return `- ${step.title}: ${headline}`;
+    });
+
+  return [
+    `Ticker: ${state.ticker}`,
+    `Requested action: ${state.requestedAction}`,
+    `Current step: ${state.currentStep}`,
+    state.resizePreferencePct != null
+      ? `Resize preference: ${state.resizePreferencePct}%`
+      : null,
+    state.resizePreferenceAmount != null
+      ? `Resize preference amount: $${state.resizePreferenceAmount.toLocaleString()}`
+      : null,
+    completedSteps.length > 0 ? 'Completed steps:' : null,
+    completedSteps.length > 0 ? completedSteps.join('\n') : null,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+const TRADE_CHECK_CLASSIFIER_PROMPT = `You classify short user replies during an active trade checklist.
+
+Return JSON only in this exact shape:
+{
+  "action": "continue" | "challenge" | "bail" | "skip" | "question" | "resize",
+  "reason": string,
+  "challengeNote": string | null,
+  "question": string | null,
+  "resizePct": number | null,
+  "resizeAmount": number | null
+}
+
+Classification rules:
+- continue: move to the next checklist step. Examples: "continue", "go on", "next", "sounds good"
+- challenge: the user disagrees, adds nuance, or wants the same step reconsidered. Examples: "that seems harsh", "you missed the debt payoff", "I think margins are recovering"
+- bail: stop the checklist. Examples: "stop", "leave it there", "that's enough", "never mind"
+- skip: skip the current step and move on. Examples: "skip this", "skip catalysts"
+- question: the user is asking for clarification before deciding. Examples: "what makes you say that?", "why is that a risk?"
+- resize: the user wants a different size or exposure. Examples: "make it 4%", "what about $3k?", "too big for my SMSF"
+
+Rules:
+- If a reply contains a clear size request, prefer resize even if it also sounds like a challenge.
+- If the reply is a question, prefer question unless it clearly asks to skip or stop.
+- challengeNote should contain the user's key pushback in one short sentence if action=challenge, else null.
+- question should contain the user's question cleaned up if action=question, else null.
+- resizePct should be the requested percentage if present, else null.
+- resizeAmount should be the requested dollar amount if present, else null.
+- Never wrap JSON in markdown fences.`;
+
+const TRADE_CHECK_SCREEN_TEMPLATE = `You are running Step 1 of Cerna Trading's trade checklist for {ticker}. Today is {date}.
+
+The user is considering whether to {requestedAction} {ticker}. This is a QUICK SCREEN, not the full verdict. Your job is to decide whether the idea deserves deeper work.
+
+The user's default exchange is {userExchange}. Their base currency is {userCurrency}.
+
+{portfolioContext}
+
+Output JSON only in this exact shape:
+{
+  "headline": string,
+  "summary": string,
+  "signal": "go" | "caution" | "stop",
+  "passesInitialScreen": boolean,
+  "setupView": string,
+  "liquidityView": string,
+  "whyNow": string,
+  "keyPoints": string[],
+  "riskFlags": string[]
+}
+
+What this step should answer:
+- Is this obviously untradeable, too speculative, too illiquid, or badly mismatched to the user?
+- Does it at least deserve fundamentals work?
+- What is the single best reason to continue and the single biggest reason to stop?
+
+Rules:
+- Be decisive. This is a gate, not a neutral encyclopedia entry.
+- Prefer caution over false precision.
+- If the user's profile makes the stock inappropriate (for example SMSF + speculative small cap), say so directly.
+- Keep keyPoints to 2-4 bullets and riskFlags to 1-3 bullets.`;
+
+const TRADE_CHECK_FUNDAMENTALS_TEMPLATE = `You are running Step 2 of Cerna Trading's trade checklist for {ticker}. Today is {date}.
+
+The user is considering whether to {requestedAction} {ticker}. This step focuses on fundamentals, balance sheet quality, earnings power, and valuation support.
+
+The user's default exchange is {userExchange}. Their base currency is {userCurrency}.
+
+{portfolioContext}
+
+Return JSON only in this exact shape:
+{
+  "headline": string,
+  "summary": string,
+  "signal": "go" | "caution" | "stop",
+  "qualityScore": number | null,
+  "valuationView": "cheap" | "fair" | "stretched" | "unclear",
+  "balanceSheetView": string,
+  "earningsView": string,
+  "whatNeedsToBeTrue": string,
+  "keyPoints": string[],
+  "riskFlags": string[]
+}
+
+Rules:
+- Use web search for every factual claim. No invented financial metrics.
+- qualityScore is 0-100 if you have enough data, otherwise null.
+- The summary should answer: "Do the numbers support continuing this trade idea?"
+- If the user challenged the prior step, address that challenge directly.`;
+
+const TRADE_CHECK_CATALYST_TEMPLATE = `You are running Step 3 of Cerna Trading's trade checklist for {ticker}. Today is {date}.
+
+The user is considering whether to {requestedAction} {ticker}. This step focuses on catalysts, timing, and what could realistically move the stock over the next 1-12 months.
+
+The user's default exchange is {userExchange}. Their base currency is {userCurrency}.
+
+{portfolioContext}
+
+Return JSON only in this exact shape:
+{
+  "headline": string,
+  "summary": string,
+  "signal": "go" | "caution" | "stop",
+  "timingWindow": string,
+  "nearTermCatalysts": string[],
+  "whatCouldBreakMomentum": string,
+  "keyPoints": string[],
+  "riskFlags": string[]
+}
+
+Rules:
+- Use web search for every factual claim.
+- Prefer concrete catalysts with timing over generic statements like "if sentiment improves".
+- If there is no credible near-term catalyst, say that plainly.`;
+
+const TRADE_CHECK_PORTFOLIO_FIT_TEMPLATE = `You are running Step 4 of Cerna Trading's trade checklist for {ticker}. Today is {date}.
+
+The user is considering whether to {requestedAction} {ticker}. This step decides whether the idea fits their existing portfolio, risk profile, and position sizing discipline.
+
+The user's default exchange is {userExchange}. Their base currency is {userCurrency}.
+
+{portfolioContext}
+
+Return JSON only in this exact shape:
+{
+  "headline": string,
+  "summary": string,
+  "signal": "go" | "caution" | "stop",
+  "fitScore": number | null,
+  "suggestedSizePct": number | null,
+  "suggestedSizeAmount": number | null,
+  "sizingNote": string,
+  "diversificationImpact": string,
+  "keyPoints": string[],
+  "riskFlags": string[]
+}
+
+Rules:
+- fitScore is 0-100 if you can assess it, otherwise null.
+- Position sizing must reflect the user's context. If capital base is known, use a dollar amount and a percentage. Otherwise use percentages only.
+- If the user requests a resize, honour it if reasonable. If it is too large or too small, explain why and propose a better size.
+- SMSF accounts should be treated conservatively.`;
+
+const TRADE_CHECK_VERDICT_TEMPLATE = `You are running Step 5, the final verdict, for Cerna Trading's trade checklist on {ticker}. Today is {date}.
+
+The user is considering whether to {requestedAction} {ticker}. You now have the prior checklist findings and must make a decisive final call.
+
+The user's default exchange is {userExchange}. Their base currency is {userCurrency}.
+
+{portfolioContext}
+
+Return JSON only in this exact shape:
+{
+  "headline": string,
+  "verdict": "GO" | "NO_GO" | "CONDITIONAL",
+  "conviction": "low" | "medium" | "high",
+  "summary": string,
+  "positionSizing": string,
+  "timeframe": string,
+  "entryStrategy": string[],
+  "invalidationTriggers": string[],
+  "watchFor": string[],
+  "finalCall": string
+}
+
+Rules:
+- The headline must be decisive and readable at a glance.
+- GO means actionable now.
+- CONDITIONAL means only act if specific conditions are met.
+- NO_GO means pass and explain why.
+- entryStrategy must be concrete, time-bound, and usable.
+- invalidationTriggers must be specific enough that the user could act on them.
+- Final call should read like a senior analyst's conclusion, not a hedge-heavy summary.`;
+
+export function buildTradeCheckClassifierPrompt(): string {
+  return TRADE_CHECK_CLASSIFIER_PROMPT;
+}
+
+export function buildTradeCheckScreenPrompt(options: {
+  ticker: string;
+  requestedAction: TradeCheckRequestedAction;
+  portfolioContext: string;
+  exchange: ExchangeContext;
+  userContext?: ResearchUserContext;
+  extraContext?: string;
+}): string {
+  return withTradeCheckContext(TRADE_CHECK_SCREEN_TEMPLATE, options);
+}
+
+export function buildTradeCheckFundamentalsPrompt(options: {
+  ticker: string;
+  requestedAction: TradeCheckRequestedAction;
+  portfolioContext: string;
+  exchange: ExchangeContext;
+  userContext?: ResearchUserContext;
+  extraContext?: string;
+}): string {
+  return withTradeCheckContext(TRADE_CHECK_FUNDAMENTALS_TEMPLATE, options);
+}
+
+export function buildTradeCheckCatalystPrompt(options: {
+  ticker: string;
+  requestedAction: TradeCheckRequestedAction;
+  portfolioContext: string;
+  exchange: ExchangeContext;
+  userContext?: ResearchUserContext;
+  extraContext?: string;
+}): string {
+  return withTradeCheckContext(TRADE_CHECK_CATALYST_TEMPLATE, options);
+}
+
+export function buildTradeCheckPortfolioFitPrompt(options: {
+  ticker: string;
+  requestedAction: TradeCheckRequestedAction;
+  portfolioContext: string;
+  exchange: ExchangeContext;
+  userContext?: ResearchUserContext;
+  extraContext?: string;
+}): string {
+  return withTradeCheckContext(TRADE_CHECK_PORTFOLIO_FIT_TEMPLATE, options);
+}
+
+export function buildTradeCheckVerdictPrompt(options: {
+  ticker: string;
+  requestedAction: TradeCheckRequestedAction;
+  portfolioContext: string;
+  exchange: ExchangeContext;
+  userContext?: ResearchUserContext;
+  extraContext?: string;
+}): string {
+  return withTradeCheckContext(TRADE_CHECK_VERDICT_TEMPLATE, options);
+}
+
+export function buildTradeCheckGateMessagePrompt(options: {
+  stepId: TradeCheckStepId;
+  state: TradeCheckState;
+  userReply?: string;
+  classification?: TradeCheckResponseClassification | null;
+}): string {
+  const step = options.state.steps[options.stepId];
+  const result = step.result ? JSON.stringify(step.result, null, 2) : 'null';
+
+  return `You write the short co-pilot message that appears after a Cerna trade checklist step.
+
+Current trade checklist state:
+${summarizeTradeCheckState(options.state)}
+
+Current step result JSON:
+${result}
+
+Latest user reply (if any):
+${options.userReply ?? 'none'}
+
+Classification (if any):
+${options.classification ? JSON.stringify(options.classification, null, 2) : 'none'}
+
+Write 2-4 short paragraphs of plain text, no markdown fences.
+
+Rules:
+- First sentence: the clearest takeaway from this step.
+- If the user asked a question, answer it directly before prompting next action.
+- If the step was challenged, acknowledge the pushback and explain whether it changes the conclusion.
+- End with the exact next options available. Use concise language.
+- For screen, fundamentals, and catalyst steps: offer continue / challenge / skip / stop.
+- For portfolio_fit: offer continue / resize / challenge / stop.
+- Do not mention internal JSON, pipelines, or "stepId".
+- Sound like a sharp human analyst, not a workflow engine.`;
 }
 
 export function buildSynthesizerPrompt(

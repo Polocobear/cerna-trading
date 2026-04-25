@@ -12,6 +12,7 @@ import {
   type ResearchUserContext,
 } from './prompts';
 import type { ToolCall, ToolName } from './types';
+import type { TradeCheckInit, TradeCheckRequestedAction } from './trade-check-types';
 
 const VALID_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'screen_stocks',
@@ -24,6 +25,11 @@ const VALID_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
 const ROUTING_RESPONSE_INSTRUCTION = `Return JSON only with this exact shape:
 {
   "directReply": string | null,
+  "tradeCheck": {
+    "ticker": string,
+    "requestedAction": "buy" | "sell" | "add" | "trim" | "hold" | "unknown",
+    "userMessage": string
+  } | null,
   "toolCalls": [
     {
       "name": "screen_stocks" | "analyze_stock" | "brief_market" | "check_portfolio" | "log_trade",
@@ -35,6 +41,7 @@ const ROUTING_RESPONSE_INSTRUCTION = `Return JSON only with this exact shape:
 
 Rules:
 - If you return one or more tool calls, set "directReply" to null.
+- If you return a tradeCheck object, set "directReply" to null and "toolCalls" to [].
 - If you reply directly, set "toolCalls" to [].
 - Use at most 3 tool calls.
 - Never wrap the JSON in markdown fences.
@@ -445,6 +452,25 @@ function parseTradeAction(message: string): 'buy' | 'sell' | 'add' | 'trim' | nu
   return null;
 }
 
+function parseTradeCheckRequestedAction(message: string): TradeCheckRequestedAction {
+  const normalized = message.toLowerCase();
+  if (/\bshould i hold\b|\bkeep holding\b|\bhold it\b/.test(normalized)) return 'hold';
+  return parseTradeAction(message) ?? 'unknown';
+}
+
+function isTradeCheckMessage(message: string, ticker: string | null): boolean {
+  if (!ticker) return false;
+  const normalized = message.trim().toLowerCase();
+
+  return (
+    /\btrade check\b|\bchecklist\b|\bwalk me through\b|\btalk me through\b/.test(normalized) ||
+    /\bshould i (buy|sell|add|trim|hold)\b/.test(normalized) ||
+    /\bworth (buying|selling|adding)\b/.test(normalized) ||
+    /\bis (this|it|[a-z]{1,5}) a buy\b/.test(normalized) ||
+    /\bentry\b/.test(normalized)
+  );
+}
+
 function parseTrade(message: string): {
   ticker: string;
   action: 'buy' | 'sell' | 'add' | 'trim';
@@ -485,7 +511,7 @@ function isGreetingOnly(message: string): boolean {
 function buildFallbackPlan(
   userMessage: string,
   context: OrchestratorContext
-): { toolCalls: ToolCall[]; directReply: string | null } {
+): { toolCalls: ToolCall[]; directReply: string | null; tradeCheck: TradeCheckInit | null } {
   const normalized = userMessage.trim().toLowerCase();
   const exchange = extractExchange(userMessage);
   const sector = extractSector(userMessage);
@@ -503,6 +529,7 @@ function buildFallbackPlan(
     return {
       toolCalls: [],
       directReply: 'Morning. Want me to look for ideas, check the market, or dig into a stock?',
+      tradeCheck: null,
     };
   }
 
@@ -510,6 +537,7 @@ function buildFallbackPlan(
     return {
       toolCalls: [],
       directReply: 'If you mean a specific stock, send the ticker and I will dig into it.',
+      tradeCheck: null,
     };
   }
 
@@ -521,7 +549,7 @@ function buildFallbackPlan(
       price: trade.price,
       ...(exchange ? { exchange } : {}),
     });
-    return { toolCalls, directReply: null };
+    return { toolCalls, directReply: null, tradeCheck: null };
   }
 
   if (
@@ -533,6 +561,7 @@ function buildFallbackPlan(
     return {
       toolCalls: [],
       directReply: 'I can log that. Send the ticker, shares, and price and I will record it.',
+      tradeCheck: null,
     };
   }
 
@@ -545,6 +574,18 @@ function buildFallbackPlan(
     normalized.includes('should i add') ||
     normalized.includes('should i trim');
 
+  if (isTradeCheckMessage(userMessage, ticker)) {
+    return {
+      toolCalls: [],
+      directReply: null,
+      tradeCheck: {
+        ticker: ticker ?? '',
+        requestedAction: parseTradeCheckRequestedAction(userMessage),
+        userMessage: userMessage.trim(),
+      },
+    };
+  }
+
   if (ticker) {
     addTool('analyze_stock', {
       ticker,
@@ -554,13 +595,14 @@ function buildFallbackPlan(
     if (mentionsBuySellDecision) {
       addTool('check_portfolio', { check_type: 'health' });
     }
-    return { toolCalls, directReply: null };
+    return { toolCalls, directReply: null, tradeCheck: null };
   }
 
   if (isVagueIntentMessage(userMessage, ticker, sector)) {
     return {
       toolCalls: [],
       directReply: VAGUE_INTENT_REPLY,
+      tradeCheck: null,
     };
   }
 
@@ -609,11 +651,12 @@ function buildFallbackPlan(
     });
   }
 
-  if (toolCalls.length > 0) return { toolCalls, directReply: null };
+  if (toolCalls.length > 0) return { toolCalls, directReply: null, tradeCheck: null };
 
   return {
     toolCalls: [],
     directReply: 'Tell me what you want to look at and I will route it. A ticker, your portfolio, or fresh ideas all work.',
+    tradeCheck: null,
   };
 }
 
@@ -624,6 +667,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function parseToolCallsFromResponse(text: string): {
   toolCalls: ToolCall[];
   directReply: string | null;
+  tradeCheck: TradeCheckInit | null;
   deep?: boolean;
 } | null {
   const parsed = parseClaudeJson<unknown>(text);
@@ -653,11 +697,29 @@ function parseToolCallsFromResponse(text: string): {
     typeof parsed.directReply === 'string' && parsed.directReply.trim().length > 0
       ? parsed.directReply.trim()
       : null;
+  const tradeCheck: TradeCheckInit | null =
+    isPlainObject(parsed.tradeCheck) &&
+    typeof parsed.tradeCheck.ticker === 'string' &&
+    typeof parsed.tradeCheck.userMessage === 'string'
+      ? {
+          ticker: parsed.tradeCheck.ticker.toUpperCase(),
+          requestedAction:
+            parsed.tradeCheck.requestedAction === 'buy' ||
+            parsed.tradeCheck.requestedAction === 'sell' ||
+            parsed.tradeCheck.requestedAction === 'add' ||
+            parsed.tradeCheck.requestedAction === 'trim' ||
+            parsed.tradeCheck.requestedAction === 'hold'
+              ? parsed.tradeCheck.requestedAction
+              : 'unknown',
+          userMessage: parsed.tradeCheck.userMessage,
+        }
+      : null;
   const deep = typeof parsed.deep === 'boolean' ? parsed.deep : undefined;
 
   return {
     toolCalls,
-    directReply: toolCalls.length > 0 ? null : directReply,
+    directReply: toolCalls.length > 0 || tradeCheck ? null : directReply,
+    tradeCheck: tradeCheck && tradeCheck.ticker ? tradeCheck : null,
     ...(deep !== undefined ? { deep } : {}),
   };
 }
@@ -668,6 +730,7 @@ export async function runOrchestrator(
 ): Promise<{
   toolCalls: ToolCall[];
   directReply: string | null;
+  tradeCheck: TradeCheckInit | null;
   deep?: boolean;
   userContext: ResearchUserContext;
 }> {
@@ -688,10 +751,20 @@ export async function runOrchestrator(
     if (!parsed) {
       throw new Error('Claude returned an unparseable routing response');
     }
+    if (parsed.tradeCheck) {
+      return {
+        toolCalls: [],
+        directReply: null,
+        tradeCheck: parsed.tradeCheck,
+        deep: parsed.deep,
+        userContext,
+      };
+    }
     if (parsed.toolCalls.length === 0) {
       return {
         toolCalls: [],
         directReply: parsed.directReply || 'How can I help with your portfolio today?',
+        tradeCheck: null,
         deep: parsed.deep,
         userContext,
       };
@@ -699,6 +772,7 @@ export async function runOrchestrator(
     return {
       toolCalls: parsed.toolCalls,
       directReply: null,
+      tradeCheck: null,
       deep: parsed.deep,
       userContext,
     };

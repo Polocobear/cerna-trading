@@ -18,6 +18,7 @@ import { ChatInput } from './ChatInput';
 import { SuggestionChips, getDefaultSuggestions } from './SuggestionChips';
 import { AgentStatusCard, type AgentStatus as UIAgentStatus } from './AgentStatusCard';
 import { SourceRail } from './SourceRail';
+import { TradeChecklist } from './TradeChecklist';
 
 interface AgentChatProps {
   sessionId: string;
@@ -195,6 +196,7 @@ export function AgentChat({
     sessionTitle,
     error,
     phase,
+    tradeCheckState,
     sendMessage,
     loadSession,
     resumePendingSession,
@@ -536,6 +538,10 @@ export function AgentChat({
               );
             })}
 
+            {tradeCheckState && (
+              <TradeChecklist state={tradeCheckState} />
+            )}
+
             {error && (
               <div
                 className="flex items-start justify-between gap-3 rounded-lg border p-3"
@@ -564,6 +570,11 @@ export function AgentChat({
         <ChatInput
           onSend={handleSend}
           disabled={isStreaming || isLoading}
+          placeholder={
+            tradeCheckState?.active
+              ? 'Continue, challenge, ask a question, resize, or say stop...'
+              : 'Ask anything about your portfolio...'
+          }
           depth={depth}
           onDepthChange={setDepth}
           deepRemaining={deepRemaining}
