@@ -16,7 +16,8 @@ export interface FlexPosition {
   currency: string;
   description: string;
   position: number;
-  costBasisMoney: number;
+  costBasisPrice: number; // per-share cost basis (IB attribute: costBasisPrice)
+  markPrice: number;
   marketValue: number;
   fifoPnlUnrealized: number;
   fifoPnlRealized: number;
@@ -25,6 +26,39 @@ export interface FlexPosition {
 export interface FlexCashBalance {
   currency: string;
   endingCash: number;
+}
+
+export interface FlexTrade {
+  tradeId: string;
+  symbol: string;
+  exchange: string;
+  description: string;
+  buySell: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  tradeMoney: number;
+  commission: number;
+  netCash: number;
+  currency: string;
+  tradeDate: string; // YYYY-MM-DD
+  tradeDateTime: string; // ISO 8601 (UTC string)
+  orderType: string;
+  notes: string;
+  assetCategory: string;
+}
+
+export interface FlexEquitySummary {
+  reportDate: string;
+  cash: number;
+  stock: number;
+  currency: string;
+}
+
+export interface FlexAccountInfo {
+  accountId: string;
+  currency: string;
+  name: string;
+  accountType: string;
 }
 
 export interface FlexTradeConfirm {
@@ -42,6 +76,9 @@ export interface FlexTradeConfirm {
 export interface FlexActivityReport {
   positions: FlexPosition[];
   cashBalances: FlexCashBalance[];
+  trades: FlexTrade[];
+  equitySummary: FlexEquitySummary | null;
+  accountInfo: FlexAccountInfo | null;
 }
 
 export interface FlexTradeConfirmReport {
@@ -139,6 +176,36 @@ function str(v: unknown): string {
 }
 
 /**
+ * Convert IB's "YYYY-MM-DD,HH:MM:SS" datetime to ISO 8601 (UTC).
+ * Falls back to tradeDate if dateTime is missing/malformed.
+ */
+function flexDateTimeToIso(dateTime: string, fallbackDate: string): string {
+  if (dateTime) {
+    const [datePart, timePart] = dateTime.split(',');
+    if (datePart) {
+      const time = timePart && timePart.length >= 8 ? timePart : '00:00:00';
+      const iso = `${datePart}T${time}Z`;
+      const ms = Date.parse(iso);
+      if (Number.isFinite(ms)) return new Date(ms).toISOString();
+    }
+  }
+  if (fallbackDate) {
+    const ms = Date.parse(`${fallbackDate}T00:00:00Z`);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function isCancellationTrade(t: Record<string, unknown>): boolean {
+  const tradeId = str(t.tradeID).trim();
+  if (!tradeId) return true;
+  const buySell = str(t.buySell);
+  const notes = str(t.notes);
+  if (buySell.includes('(Ca.)') && notes.includes('Ca')) return true;
+  return false;
+}
+
+/**
  * Parse an IB Activity Flex XML report.
  * Exposed for testing.
  */
@@ -161,8 +228,22 @@ export function parseActivityReport(xml: string): FlexActivityReport {
 
   const positions: FlexPosition[] = [];
   const cashBalances: FlexCashBalance[] = [];
+  const trades: FlexTrade[] = [];
+  let equitySummary: FlexEquitySummary | null = null;
+  let accountInfo: FlexAccountInfo | null = null;
 
   for (const stmt of stmts) {
+    // Account information
+    const accInfoRaw = stmt.AccountInformation as Record<string, unknown> | undefined;
+    if (accInfoRaw && !accountInfo) {
+      accountInfo = {
+        accountId: str(accInfoRaw.accountId),
+        currency: str(accInfoRaw.currency),
+        name: str(accInfoRaw.name),
+        accountType: str(accInfoRaw.accountType),
+      };
+    }
+
     const openPositions = toArray<Record<string, unknown>>(
       (stmt.OpenPositions as Record<string, unknown> | undefined)?.OpenPosition as
         | Record<string, unknown>
@@ -176,8 +257,9 @@ export function parseActivityReport(xml: string): FlexActivityReport {
         currency: str(p.currency),
         description: str(p.description),
         position: num(p.position),
-        costBasisMoney: num(p.costBasisMoney),
-        marketValue: num(p.markPrice != null && p.position != null ? num(p.markPrice) * num(p.position) : p.positionValue),
+        costBasisPrice: num(p.costBasisPrice),
+        markPrice: num(p.markPrice),
+        marketValue: num(p.positionValue ?? num(p.markPrice) * num(p.position)),
         fifoPnlUnrealized: num(p.fifoPnlUnrealized),
         fifoPnlRealized: num(p.fifoPnlRealized),
       });
@@ -197,9 +279,66 @@ export function parseActivityReport(xml: string): FlexActivityReport {
         endingCash: num(c.endingCash),
       });
     }
+
+    // Trades from Activity flex (separate from <TradeConfirms>)
+    const tradeRows = toArray<Record<string, unknown>>(
+      (stmt.Trades as Record<string, unknown> | undefined)?.Trade as
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined
+    );
+    for (const t of tradeRows) {
+      const assetCategory = str(t.assetCategory);
+      // Skip FX (e.g. EUR.AUD) — only sync stock trades.
+      if (assetCategory === 'CASH') continue;
+      if (isCancellationTrade(t)) continue;
+
+      const buySellRaw = str(t.buySell).toUpperCase();
+      const buySell: 'BUY' | 'SELL' = buySellRaw.startsWith('SELL') ? 'SELL' : 'BUY';
+      const tradeDate = str(t.tradeDate);
+      const dateTime = str(t.dateTime);
+      trades.push({
+        tradeId: str(t.tradeID).trim(),
+        symbol: str(t.symbol),
+        exchange: str(t.listingExchange || t.exchange),
+        description: str(t.description),
+        buySell,
+        quantity: Math.abs(num(t.quantity)),
+        price: num(t.tradePrice),
+        tradeMoney: Math.abs(num(t.tradeMoney)),
+        commission: Math.abs(num(t.ibCommission)),
+        netCash: num(t.netCash),
+        currency: str(t.currency),
+        tradeDate,
+        tradeDateTime: flexDateTimeToIso(dateTime, tradeDate),
+        orderType: str(t.orderType),
+        notes: str(t.notes),
+        assetCategory,
+      });
+    }
+
+    // Equity summary — pick the row with the latest reportDate.
+    const equityRows = toArray<Record<string, unknown>>(
+      (stmt.EquitySummaryInBase as Record<string, unknown> | undefined)?.EquitySummaryByReportDateInBase as
+        | Record<string, unknown>
+        | Record<string, unknown>[]
+        | undefined
+    );
+    for (const e of equityRows) {
+      const reportDate = str(e.reportDate);
+      if (!reportDate) continue;
+      if (!equitySummary || reportDate > equitySummary.reportDate) {
+        equitySummary = {
+          reportDate,
+          cash: num(e.cash),
+          stock: num(e.stock),
+          currency: str(e.currency),
+        };
+      }
+    }
   }
 
-  return { positions, cashBalances };
+  return { positions, cashBalances, trades, equitySummary, accountInfo };
 }
 
 /**

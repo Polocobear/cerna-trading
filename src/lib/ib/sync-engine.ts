@@ -5,6 +5,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   FlexActivityReport,
+  FlexTrade,
   FlexTradeConfirmReport,
   FlexTradeConfirm,
 } from './flex-client';
@@ -104,7 +105,8 @@ export async function syncActivityReport(
     const ticker = flex.symbol.toUpperCase();
     seenTickers.add(ticker);
     const shares = flex.position;
-    const costBasis = shares !== 0 ? flex.costBasisMoney / shares : 0;
+    // IB's `costBasisPrice` attribute is already per-share — use it directly.
+    const costBasis = flex.costBasisPrice;
     const existing = currentByTicker.get(ticker);
 
     if (!existing) {
@@ -158,21 +160,40 @@ export async function syncActivityReport(
     }
   }
 
-  // Cash — pick largest cash balance (typically user's base currency)
-  if (report.cashBalances.length > 0) {
+  // Trades from Activity flex — insert with dedup by tradeID stored in raw_message.
+  result.trades = await syncFlexTrades(supabase, userId, report.trades, result.errors);
+
+  // Cash + currency + dominant exchange.
+  // Prefer EquitySummaryByReportDateInBase (single canonical row) over CashReport rollup.
+  const dominant = dominantExchange(report.positions);
+  const profileUpdates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    ib_connected: true,
+  };
+  if (report.equitySummary) {
+    profileUpdates.cash_available = report.equitySummary.cash;
+    if (report.equitySummary.currency) {
+      profileUpdates.preferred_currency = report.equitySummary.currency;
+    }
+    result.cashUpdated = true;
+  } else if (report.cashBalances.length > 0) {
     const totalCash = report.cashBalances.reduce((sum, b) => sum + b.endingCash, 0);
     const currency = dominantCurrency(report.cashBalances);
-    const dominant = dominantExchange(report.positions);
-    const updates: Record<string, unknown> = {
-      cash_available: totalCash,
-      updated_at: new Date().toISOString(),
-    };
-    if (currency) updates.preferred_currency = currency;
-    if (dominant) updates.preferred_exchange = dominant;
-    const { error } = await supabase.from('profiles').update(updates).eq('id', userId);
-    if (error) result.errors.push(`update cash: ${error.message}`);
-    else result.cashUpdated = true;
+    profileUpdates.cash_available = totalCash;
+    if (currency) profileUpdates.preferred_currency = currency;
+    result.cashUpdated = true;
   }
+  // AccountInformation.currency wins over equitySummary if present.
+  if (report.accountInfo?.currency) {
+    profileUpdates.preferred_currency = report.accountInfo.currency;
+  }
+  if (dominant) profileUpdates.preferred_exchange = dominant;
+
+  const { error: profileErr } = await supabase
+    .from('profiles')
+    .update(profileUpdates)
+    .eq('id', userId);
+  if (profileErr) result.errors.push(`update profile: ${profileErr.message}`);
 
   // Log sync history
   const status = result.errors.length === 0 ? 'success' : result.errors.length < 3 ? 'partial' : 'error';
@@ -181,7 +202,7 @@ export async function syncActivityReport(
     sync_type: 'flex_activity',
     status,
     positions_updated: result.positionsUpdated + result.positionsAdded + result.positionsRemoved,
-    trades_imported: 0,
+    trades_imported: result.trades,
     error_message: result.errors.length > 0 ? result.errors.join('; ').slice(0, 500) : null,
   });
 
@@ -196,10 +217,63 @@ export async function syncActivityReport(
     })
     .eq('user_id', userId);
 
-  // Mark user as IB-connected
-  await supabase.from('profiles').update({ ib_connected: true }).eq('id', userId);
-
   return result;
+}
+
+const FLEX_RAW_PREFIX = 'flex_id:';
+
+async function syncFlexTrades(
+  supabase: SupabaseClient,
+  userId: string,
+  trades: FlexTrade[],
+  errors: string[]
+): Promise<number> {
+  if (trades.length === 0) return 0;
+
+  const rawIds = trades.map((t) => `${FLEX_RAW_PREFIX}${t.tradeId}`);
+  const { data: existingRows, error: fetchErr } = await supabase
+    .from('logged_trades')
+    .select('raw_message')
+    .eq('user_id', userId)
+    .in('raw_message', rawIds);
+
+  if (fetchErr) {
+    errors.push(`fetch existing trades: ${fetchErr.message}`);
+    return 0;
+  }
+
+  const existing = new Set<string>();
+  for (const row of (existingRows ?? []) as Array<{ raw_message: string | null }>) {
+    if (row.raw_message) existing.add(row.raw_message);
+  }
+
+  let imported = 0;
+  for (const t of trades) {
+    const raw = `${FLEX_RAW_PREFIX}${t.tradeId}`;
+    if (existing.has(raw)) continue;
+
+    const action = t.buySell === 'SELL' ? 'sell' : 'buy';
+    const { error } = await supabase.from('logged_trades').insert({
+      user_id: userId,
+      ticker: t.symbol.toUpperCase(),
+      exchange: t.exchange || null,
+      action,
+      shares: t.quantity,
+      price: t.price,
+      currency: t.currency || null,
+      logged_via: 'flex_activity',
+      reconciled: true,
+      raw_message: raw,
+      trade_date: t.tradeDateTime,
+    });
+    if (error) {
+      errors.push(`insert trade ${t.tradeId}: ${error.message}`);
+    } else {
+      imported++;
+      existing.add(raw);
+    }
+  }
+  return imported;
 }
 
 function tradesMatch(
