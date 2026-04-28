@@ -1,15 +1,5 @@
-import { getCachedPrice, setCachedPrice } from './cache';
-
-interface YahooQuote {
-  symbol: string;
-  regularMarketPrice?: number;
-  regularMarketChangePercent?: number;
-  currency?: string;
-}
-
-interface YahooResponse {
-  quoteResponse?: { result?: YahooQuote[] };
-}
+import { getCachedPrice, setCachedPrice, getYahooSymbol } from './cache';
+import { fetchV8QuotesParallel } from '@/lib/yahoo/v8-quote';
 
 export interface ServerPriceResult {
   price: number;
@@ -21,55 +11,53 @@ export async function fetchPricesForTickers(
   tickers: Array<{ ticker: string; exchange?: string | null }>
 ): Promise<Record<string, ServerPriceResult>> {
   const out: Record<string, ServerPriceResult> = {};
-  const toFetch: string[] = [];
+  const toFetch: Array<{ ticker: string; exchange?: string | null }> = [];
 
-  for (const { ticker } of tickers) {
-    const key = ticker.toUpperCase();
+  for (const t of tickers) {
+    const key = t.ticker.toUpperCase();
     const cached = getCachedPrice(key);
     if (cached) {
-      out[key] = { price: cached.price, changePercent: cached.changePercent, currency: cached.currency };
+      out[key] = {
+        price: cached.price,
+        changePercent: cached.changePercent,
+        currency: cached.currency,
+      };
     } else {
-      toFetch.push(key);
+      toFetch.push({ ticker: key, exchange: t.exchange });
     }
   }
 
   if (toFetch.length === 0) return out;
 
-  // Use .AX suffix (ASX-focused app)
-  const symbols = toFetch.map((t) => `${t}.AX`).join(',');
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
+  const symbolToTicker = new Map<string, string>();
+  for (const t of toFetch) {
+    symbolToTicker.set(getYahooSymbol(t.ticker, t.exchange), t.ticker);
+  }
+  const v8Map = await fetchV8QuotesParallel(Array.from(symbolToTicker.keys()));
 
-  try {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        Accept: 'application/json',
-      },
-      cache: 'no-store',
+  for (const [symbol, v8] of v8Map.entries()) {
+    const ticker = symbolToTicker.get(symbol);
+    if (!ticker) continue;
+    setCachedPrice(ticker, {
+      price: v8.regularMarketPrice,
+      change: v8.dailyChange,
+      changePercent: v8.dailyChangePct,
+      currency: v8.currency,
+      marketState: v8.marketState,
     });
-    if (!res.ok) return out;
+    out[ticker] = {
+      price: v8.regularMarketPrice,
+      changePercent: v8.dailyChangePct,
+      currency: v8.currency,
+    };
+  }
 
-    const data = (await res.json()) as YahooResponse;
-    const results = data.quoteResponse?.result ?? [];
-
-    for (const q of results) {
-      if (q.regularMarketPrice == null) continue;
-      const ticker = q.symbol.replace(/\.AX$/i, '').toUpperCase();
-      setCachedPrice(ticker, {
-        price: q.regularMarketPrice,
-        change: 0,
-        changePercent: q.regularMarketChangePercent ?? 0,
-        currency: q.currency ?? 'AUD',
-        marketState: 'CLOSED',
-      });
-      out[ticker] = {
-        price: q.regularMarketPrice,
-        changePercent: q.regularMarketChangePercent ?? 0,
-        currency: q.currency ?? 'AUD',
-      };
+  // Tickers that failed to fetch are simply absent from `out`. Caller treats
+  // missing entries as null/unavailable rather than $0.00.
+  for (const t of toFetch) {
+    if (!out[t.ticker]) {
+      console.error(`[server-fetch] no price for ${t.ticker} (exchange=${t.exchange ?? 'n/a'})`);
     }
-  } catch {
-    // Non-fatal
   }
 
   return out;

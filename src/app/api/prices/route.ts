@@ -3,29 +3,13 @@ import {
   getCachedPrice,
   setCachedPrice,
   getYahooSymbol,
-  stripYahooSuffix,
   type PriceData,
 } from '@/lib/prices/cache';
+import { fetchV8QuotesParallel } from '@/lib/yahoo/v8-quote';
 import { createClient } from '@/lib/supabase/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-interface YahooQuote {
-  symbol: string;
-  regularMarketPrice?: number;
-  regularMarketChange?: number;
-  regularMarketChangePercent?: number;
-  currency?: string;
-  marketState?: string;
-}
-
-interface YahooResponse {
-  quoteResponse?: {
-    result?: YahooQuote[];
-    error?: unknown;
-  };
-}
 
 async function fetchYahoo(
   entries: Array<{ ticker: string; exchange?: string | null }>
@@ -35,32 +19,19 @@ async function fetchYahoo(
     const sym = getYahooSymbol(e.ticker, e.exchange);
     symbolToTicker.set(sym, e.ticker.toUpperCase());
   }
-  const symbols = Array.from(symbolToTicker.keys()).join(',');
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols)}`;
-
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-      Accept: 'application/json',
-    },
-    cache: 'no-store',
-  });
-
-  if (!res.ok) throw new Error(`Yahoo ${res.status}`);
-  const data = (await res.json()) as YahooResponse;
-  const results = data.quoteResponse?.result ?? [];
+  const symbols = Array.from(symbolToTicker.keys());
+  const v8Map = await fetchV8QuotesParallel(symbols);
 
   const out: Record<string, Omit<PriceData, 'fetchedAt'>> = {};
-  for (const q of results) {
-    if (q.regularMarketPrice == null) continue;
-    const ticker = symbolToTicker.get(q.symbol) ?? stripYahooSuffix(q.symbol).toUpperCase();
+  for (const [symbol, v8] of v8Map.entries()) {
+    const ticker = symbolToTicker.get(symbol);
+    if (!ticker) continue;
     out[ticker] = {
-      price: q.regularMarketPrice,
-      change: q.regularMarketChange ?? 0,
-      changePercent: q.regularMarketChangePercent ?? 0,
-      currency: q.currency ?? 'USD',
-      marketState: q.marketState ?? 'CLOSED',
+      price: v8.regularMarketPrice,
+      change: v8.dailyChange,
+      changePercent: v8.dailyChangePct,
+      currency: v8.currency,
+      marketState: v8.marketState,
     };
   }
   return out;

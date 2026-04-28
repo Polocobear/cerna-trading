@@ -7,6 +7,7 @@ import type {
   YahooNewsItem,
   YahooQuote,
 } from './types';
+import { fetchV8QuotesParallel } from './v8-quote';
 
 const YAHOO_HEADERS = {
   'User-Agent':
@@ -27,33 +28,6 @@ type YahooDateField = {
 };
 
 type YahooNumberish = YahooNumberField | number | null | undefined;
-
-interface QuoteEndpointResult {
-  symbol: string;
-  currency?: string;
-  marketState?: string;
-  regularMarketPrice?: number;
-  regularMarketPreviousClose?: number;
-  regularMarketChange?: number;
-  regularMarketChangePercent?: number;
-  regularMarketDayHigh?: number;
-  regularMarketDayLow?: number;
-  fiftyTwoWeekHigh?: number;
-  fiftyTwoWeekLow?: number;
-  regularMarketVolume?: number;
-  averageDailyVolume3Month?: number;
-  marketCap?: number;
-  trailingPE?: number;
-  epsTrailingTwelveMonths?: number;
-  dividendYield?: number;
-  fullExchangeName?: string;
-}
-
-interface QuoteEndpointResponse {
-  quoteResponse?: {
-    result?: QuoteEndpointResult[];
-  };
-}
 
 interface RecommendationTrendEntry {
   period?: string;
@@ -174,13 +148,6 @@ function toNumber(value: YahooNumberish): number | null {
   return null;
 }
 
-function normalizeYield(value: number | null): number | null {
-  if (value == null) return null;
-  if (value > 1) return value / 100;
-  if (value < 0) return null;
-  return value;
-}
-
 function toIsoDateFromUnix(timestampSeconds: number): string {
   return new Date(timestampSeconds * 1000).toISOString();
 }
@@ -223,60 +190,40 @@ export async function fetchQuotes(tickers: string[], exchange?: string): Promise
   const results: YahooQuote[] = [];
 
   for (const batch of chunk(uniqueTickers, QUOTE_BATCH_SIZE)) {
-    const symbolLookup = new Map<string, string>();
+    const symbolToTicker = new Map<string, string>();
     const symbols = batch.map((ticker) => {
       const symbol = getYahooSymbol(ticker, exchange);
-      symbolLookup.set(symbol.toUpperCase(), ticker);
+      symbolToTicker.set(symbol, ticker);
       return symbol;
     });
 
-    try {
-      const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbols.join(','))}`;
-      const payload = await fetchYahooJson<QuoteEndpointResponse>(url);
-      const quoteResults = payload.quoteResponse?.result ?? [];
+    const v8Map = await fetchV8QuotesParallel(symbols);
+    for (const symbol of symbols) {
+      const ticker = symbolToTicker.get(symbol);
+      const v8 = v8Map.get(symbol);
+      if (!ticker || !v8) continue;
 
-      for (const quote of quoteResults) {
-        const ticker = symbolLookup.get(quote.symbol.toUpperCase());
-        if (!ticker || typeof quote.regularMarketPrice !== 'number') continue;
-
-        const previousClose =
-          typeof quote.regularMarketPreviousClose === 'number'
-            ? quote.regularMarketPreviousClose
-            : quote.regularMarketPrice - (quote.regularMarketChange ?? 0);
-        const dailyChange =
-          typeof quote.regularMarketChange === 'number'
-            ? quote.regularMarketChange
-            : quote.regularMarketPrice - previousClose;
-        const dailyChangePct =
-          typeof quote.regularMarketChangePercent === 'number'
-            ? quote.regularMarketChangePercent
-            : previousClose > 0
-            ? (dailyChange / previousClose) * 100
-            : 0;
-
-        results.push({
-          ticker,
-          exchange: exchange ?? quote.fullExchangeName ?? 'ASX',
-          currency: quote.currency ?? 'AUD',
-          currentPrice: quote.regularMarketPrice,
-          previousClose,
-          dailyChange,
-          dailyChangePct,
-          dayHigh: quote.regularMarketDayHigh ?? quote.regularMarketPrice,
-          dayLow: quote.regularMarketDayLow ?? quote.regularMarketPrice,
-          fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh ?? quote.regularMarketPrice,
-          fiftyTwoWeekLow: quote.fiftyTwoWeekLow ?? quote.regularMarketPrice,
-          volume: quote.regularMarketVolume ?? 0,
-          averageVolume: quote.averageDailyVolume3Month ?? 0,
-          marketCap: quote.marketCap ?? 0,
-          pe: typeof quote.trailingPE === 'number' ? quote.trailingPE : null,
-          eps: typeof quote.epsTrailingTwelveMonths === 'number' ? quote.epsTrailingTwelveMonths : null,
-          dividendYield: normalizeYield(typeof quote.dividendYield === 'number' ? quote.dividendYield : null),
-          marketState: normalizeMarketState(quote.marketState),
-        });
-      }
-    } catch {
-      continue;
+      results.push({
+        ticker,
+        exchange: exchange ?? v8.exchangeName ?? 'ASX',
+        currency: v8.currency,
+        currentPrice: v8.regularMarketPrice,
+        previousClose: v8.previousClose,
+        dailyChange: v8.dailyChange,
+        dailyChangePct: v8.dailyChangePct,
+        dayHigh: v8.regularMarketDayHigh,
+        dayLow: v8.regularMarketDayLow,
+        fiftyTwoWeekHigh: v8.fiftyTwoWeekHigh,
+        fiftyTwoWeekLow: v8.fiftyTwoWeekLow,
+        // v8 chart meta omits these — leave as 0/null.
+        volume: 0,
+        averageVolume: 0,
+        marketCap: 0,
+        pe: null,
+        eps: null,
+        dividendYield: null,
+        marketState: normalizeMarketState(v8.marketState),
+      });
     }
   }
 
