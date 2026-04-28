@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertBanner } from '@/features/alerts/AlertBanner';
 import { useAlerts } from '@/lib/alerts/use-alerts';
 import type { Position, WatchlistItem } from '@/types/portfolio';
@@ -11,6 +11,13 @@ import { HoldingCard } from './HoldingCard';
 import { WatchlistCard } from './WatchlistCard';
 import { EmptyDashboard } from './EmptyDashboard';
 import { SortControls, type DashboardSortKey } from './SortControls';
+
+interface SyncStatusPayload {
+  connected: boolean;
+  last_activity_sync: string | null;
+  sync_status: 'pending' | 'syncing' | 'success' | 'error' | null;
+  sync_error: string | null;
+}
 
 interface DashboardProps {
   positions: Position[];
@@ -61,6 +68,50 @@ export function Dashboard({
   const sortedHoldings = useMemo(() => sortHoldings(dashboard.holdings, sortBy), [dashboard.holdings, sortBy]);
   const { alerts, dismissAlert, markRead } = useAlerts();
 
+  const [syncStatus, setSyncStatus] = useState<SyncStatusPayload | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const loadSyncStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/portfolio/sync/status', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = (await res.json()) as SyncStatusPayload;
+      setSyncStatus(data);
+    } catch {
+      // Non-fatal — sync indicator just won't show.
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSyncStatus();
+  }, [loadSyncStatus]);
+
+  const triggerSync = useCallback(async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      const res = await fetch('/api/portfolio/sync', { method: 'POST' });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `Sync failed (${res.status})`);
+      }
+      await loadSyncStatus();
+      // Refresh Yahoo data so the dashboard reflects the new positions.
+      dashboard.refresh();
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : 'Sync failed');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [dashboard, isSyncing, loadSyncStatus]);
+
+  const lastSyncedAt = useMemo(
+    () => (syncStatus?.last_activity_sync ? new Date(syncStatus.last_activity_sync) : null),
+    [syncStatus?.last_activity_sync]
+  );
+
   if (dashboard.holdings.length === 0 && dashboard.watchlist.length === 0) {
     return (
       <div className="h-full overflow-y-auto custom-scrollbar p-4 md:p-6">
@@ -93,11 +144,12 @@ export function Dashboard({
           totalPnL={dashboard.totalPnL}
           cashAvailable={dashboard.cashAvailable}
           marketState={dashboard.marketState}
-          lastUpdated={dashboard.lastUpdated}
+          lastSyncedAt={lastSyncedAt}
           sparklineData={dashboard.sparklineData}
           hasStaleData={dashboard.hasStaleData}
-          isRefreshing={dashboard.isRefreshing}
-          onRefresh={dashboard.refresh}
+          isSyncing={isSyncing}
+          syncError={syncError}
+          onSync={triggerSync}
         />
 
         <EarningsCalendar items={dashboard.upcomingEarnings} />

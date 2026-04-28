@@ -11,12 +11,15 @@ interface PortfolioSummaryProps {
   totalPnL: number;
   cashAvailable: number;
   marketState: YahooMarketState;
-  lastUpdated: Date | null;
+  lastSyncedAt: Date | null;
   sparklineData: number[];
   hasStaleData: boolean;
-  isRefreshing: boolean;
-  onRefresh: () => void;
+  isSyncing: boolean;
+  syncError: string | null;
+  onSync: () => void;
 }
+
+const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 function getMarketLabel(state: YahooMarketState): string {
   switch (state) {
@@ -50,15 +53,21 @@ export function PortfolioSummary({
   totalPnL,
   cashAvailable,
   marketState,
-  lastUpdated,
+  lastSyncedAt,
   sparklineData,
   hasStaleData,
-  isRefreshing,
-  onRefresh,
+  isSyncing,
+  syncError,
+  onSync,
 }: PortfolioSummaryProps) {
   const isPositive = dailyPnL >= 0;
   const totalPnLPositive = totalPnL >= 0;
   const deltaColor = isPositive ? 'var(--positive)' : 'var(--negative)';
+  const syncAgeMs = lastSyncedAt ? Date.now() - lastSyncedAt.getTime() : null;
+  const isStale = syncAgeMs == null || syncAgeMs >= STALE_THRESHOLD_MS;
+  const syncLabel = lastSyncedAt
+    ? `Last synced ${formatRelativeTime(lastSyncedAt)}`
+    : 'Never synced';
 
   return (
     <section className="dashboard-summary-strip">
@@ -114,28 +123,41 @@ export function PortfolioSummary({
           <div className="flex items-center gap-3 text-[12px]">
             <button
               type="button"
-              onClick={onRefresh}
+              onClick={onSync}
+              disabled={isSyncing}
               className={cn(
                 'flex items-center gap-1 rounded-full px-2.5 py-1 transition-smooth',
-              isRefreshing && 'opacity-80'
-            )}
-            style={{
+                isSyncing && 'opacity-80 cursor-wait'
+              )}
+              style={{
                 background: 'var(--dashboard-surface-04)',
                 color: 'var(--dashboard-text-55)',
                 border: '1px solid var(--dashboard-surface-05)',
               }}
+              aria-label={isSyncing ? 'Syncing...' : 'Sync now'}
             >
-              <RefreshCw size={12} className={cn(isRefreshing && 'animate-spin')} />
-              <span>Refresh</span>
+              <RefreshCw size={12} className={cn(isSyncing && 'animate-spin')} />
+              <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
             </button>
-            <span className="tabular-nums" style={{ color: 'var(--dashboard-text-35)' }}>
-              {`Updated ${formatRelativeTime(lastUpdated)}`}
+            <span
+              className="tabular-nums"
+              style={{
+                color: isStale ? 'var(--warning)' : 'var(--dashboard-text-35)',
+              }}
+            >
+              {syncLabel}
             </span>
           </div>
 
-          {hasStaleData && (
+          {syncError && (
+            <div className="text-[12px]" style={{ color: 'var(--negative)' }}>
+              {`Sync failed: ${syncError}`}
+            </div>
+          )}
+
+          {!syncError && hasStaleData && (
             <div className="text-[12px]" style={{ color: 'var(--warning)' }}>
-              Data may be delayed
+              Live prices may be delayed
             </div>
           )}
         </div>
